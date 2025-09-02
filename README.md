@@ -44,8 +44,8 @@ A Python-based computer vision project that reads clean, computer-generated shee
    Download FluidSynth from the official website or use a package manager like Chocolatey.
 
 4. **Download a SoundFont file** (optional):
-   - Download a free SoundFont like "FluidR3_GM.sf2"
-   - Place it in the project directory or specify the path when running
+   - Download a free SoundFont
+   - Place it in the soundfonts folder in the project directory 
 
 ## Usage
 
@@ -75,12 +75,7 @@ python main.py sheet_music.png --tempo 140
 
 **Use a custom SoundFont**:
 ```bash
-python main.py sheet_music.png --soundfont /path/to/your/soundfont.sf2
-```
-
-**Enable debug mode**:
-```bash
-python main.py sheet_music.png --debug
+python main.py sheet_music.png --soundfont soundfont_file_name.sf2
 ```
 
 ### Command Line Options
@@ -88,7 +83,7 @@ python main.py sheet_music.png --debug
 - `image_path`: Path to the sheet music image file
 - `--tempo`: Tempo in beats per minute (default: 120)
 - `--soundfont`: Path to SoundFont file (.sf2)
-- `--debug`: Enable debug mode with additional logging
+- `--preview`: Save preprocessed images to the preview_directory folder
 
 ## How It Works
 
@@ -142,12 +137,13 @@ The system currently supports notes in the treble clef range:
 
 ```
 project/
-├── sheet_music_player.py    # Main player class
-├── main.py                  # Command line interface
-├── test_sheet_music.py      # Test image generator
-├── requirements.txt         # Python dependencies
-├── README.md               # This file
-└── test_sheet_music_*.png  # Generated test images
+├── preview_directory/      # Directory where saved preprocessed images are stored
+├── soundfonts/             # Soundfonts storage
+├── test_cases/             # Sheet music storage
+├── main.py                 # Command line interface
+├── sheet_music_player.py   # Sheet music processing
+├── requirements.txt        # Python dependencies
+└── README.md               # This file
 ```
 
 ## Troubleshooting
@@ -165,8 +161,8 @@ project/
 
 3. **"No notes detected"**:
    - Check that notes are clearly visible and properly sized
-   - Ensure notes are positioned on or near staff lines
-   - Try the test images first to verify the system works
+   - Ensure notes are positioned on or between staff lines
+   - Try the provided test images first to verify the system works
 
 4. **Audio not playing**:
    - Verify FluidSynth is properly installed
@@ -182,7 +178,8 @@ project/
 
 ## Limitations
 
-- Currently optimized for treble clef only
+- Currently optimized for treble clef and key of C major only
+- Only detects quarter notes
 - Works best with computer-generated sheet music
 - Limited to single-line melodies (no chords)
 - Requires clear, well-formatted sheet music
@@ -190,16 +187,12 @@ project/
 
 ## Future Enhancements
 
-- Support for bass clef and other clefs
+- Recognition of more note subdivisions
 - Chord recognition and playback
-- Time signature detection
-- Dynamic and articulation recognition
-- Support for handwritten sheet music
-- Real-time sheet music processing
 
-## Contributing
+## TODO
 
-Feel free to submit issues, feature requests, or pull requests to improve the project.
+- Refine note sizes that are detected
 
 ## License
 

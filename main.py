@@ -68,7 +68,7 @@ Examples:
         print("Press Ctrl+C to stop playback")
         print("-" * 50)
 
-        player.play_sheet_music_color_based(args.image_path, args.tempo, save_preview=args.preview)
+        player.play_sheet_music(args.image_path, args.tempo, save_preview=args.preview)
         
     except KeyboardInterrupt:
         print("\nPlayback interrupted by user")

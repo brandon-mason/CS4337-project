@@ -59,7 +59,7 @@ class SheetMusicPlayer:
             # Try to load SoundFont
             if self.soundfont_path and os.path.exists(self.soundfont_path):
                 sfid = self.fs.sfload(self.soundfont_path)
-                self.fs.program_select(0, sfid, 0, 0)
+                self.fs.program_select(0, sfid, 0, 8)
                 self.logger.info(f"Loaded SoundFont: {self.soundfont_path}")
             else:
                 # Try to find a default SoundFont
@@ -154,12 +154,12 @@ class SheetMusicPlayer:
         
     #     return cleaned
     
-    def detect_staff_lines_by_color(self, image: np.ndarray) -> List[Dict]:
+    def detect_staff_lines(self, image: np.ndarray) -> List[Dict]:
         """
         Detect horizontal staff lines in the sheet music by color.
         
         Args:
-            image: Original sheet music image (color)
+            image: Original sheet music image
             
         Returns:
             List of staff line dictionaries with coordinates
@@ -170,10 +170,11 @@ class SheetMusicPlayer:
         # Define range for black/dark lines (staff lines are usually black)
         # You can adjust these values based on your image
         lower_black = np.array([0, 0, 0])
-        upper_black = np.array([180, 255, 50])  # Low value = dark colors
+        upper_black = np.array([180, 255, 50])
         
         # Create mask for dark lines
         mask = cv2.inRange(hsv, lower_black, upper_black)
+        self.preview_image(mask, "mask")
         
         # Find horizontal lines using morphological operations
         # Create horizontal kernel
@@ -181,6 +182,7 @@ class SheetMusicPlayer:
         
         # Detect horizontal lines
         horizontal_lines = cv2.morphologyEx(mask, cv2.MORPH_OPEN, horizontal_kernel)
+        self.preview_image(horizontal_lines, "hl")
         
         # Find contours of horizontal lines
         contours, _ = cv2.findContours(horizontal_lines, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -211,12 +213,55 @@ class SheetMusicPlayer:
         
         return grouped_lines[:5]  # Return top 5 lines (typical staff)
 
+    def resize_by_staff_height(self, original_image: np.ndarray, staff_lines: List[Dict]):
+        """
+        Check the size of the staff and resize the image accordingly.
+        
+        Args:
+            original_image: Original sheet music image
+            staff_lines: The array of staff line dictionaries calculated by detect_staff_lines
+            
+        Returns:
+            Resized image and recalculated staff line dictionaries
+            OR
+            Original image and staff line dictionaries
+        """
+        bottom_line = staff_lines[0]["y"]
+        top_line = staff_lines[len(staff_lines) - 1]["y"]
+
+        for line in staff_lines:
+            if line["y"] < bottom_line:
+                bottom_line = line["y"]
+            elif line["y"] > top_line:
+                top_line = line["y"]
+
+        staff_height = top_line - bottom_line
+
+        # Resize the image to keep the size of the staff consistent across all images(staff height should be around 100 pixels tall)
+        if not (staff_height > 90 and staff_height < 100):
+            scalar = 100 / staff_height
+            resized_image = cv2.resize(original_image, None, fx=scalar, fy=scalar, interpolation=cv2.INTER_LINEAR)
+            # self.preview_image(resized_image)
+
+            # Recalculate the staff dimensions based on the new image size
+            new_staff_lines = []
+            for line in staff_lines:
+                new_line = line
+                for key in line:
+                    new_line[key] = int(line[key] * scalar)
+                
+                new_staff_lines.append(new_line)
+
+            return resized_image, new_staff_lines
+
+        return original_image, staff_lines
+    
     def detect_notes_by_intersection(self, image_name: str, image: np.ndarray, staff_lines: List[Dict], save_preview: bool = False) -> List[Dict]:
         """
         Detect musical notes by checking intersections with staff lines.
         
         Args:
-            image: Original sheet music image (color)
+            image: Sheet music image
             staff_lines: List of staff line dictionaries
             save_preview: Whether to save the visualization detection image
             
@@ -340,7 +385,7 @@ class SheetMusicPlayer:
             # Save original
             cv2.imwrite(f"{image_name.split(".")[0]}_detection.png", vis_image)
             
-            self.logger.info(f"Preview image saved: {image_name.split(".")[0]}_*.png")
+            self.logger.info(f"Preview image saved: {image_name.split(".")[0]}_detection.png")
 
         self.preview_image(vis_image, f"{image_name.split(".")[0]}_detection_visualization")
         
@@ -435,7 +480,7 @@ class SheetMusicPlayer:
         except Exception as e:
             self.logger.error(f"Error playing note {midi_note}: {e}")
     
-    def play_sheet_music_color_based(self, image_name: str, tempo: float = 120.0, save_preview: bool = False):
+    def play_sheet_music(self, image_name: str, tempo: float = 120.0, save_preview: bool = False):
         """
         Read and play sheet music using color-based detection for staff lines and note intersections.
         
@@ -453,18 +498,23 @@ class SheetMusicPlayer:
             if original_image is None:
                 raise ValueError(f"Could not read image: {image_path}")
             
-            # Detect staff lines by color
-            staff_lines = self.detect_staff_lines_by_color(original_image)
+            # Detect staff lines
+            staff_lines = self.detect_staff_lines(original_image)
             if not staff_lines:
                 self.logger.error("No staff lines detected")
                 return
+
+            # Resize image based on staff size
+            resized_image, resized_staff_lines = self.resize_by_staff_height(original_image, staff_lines)
+            
+            self.logger.info(f"Detected {len(resized_staff_lines)} staff lines")
 
             if len(staff_lines) != 5:
                 self.logger.error("Invalid sheet music format")
                 return
 
             # Detect notes by intersection
-            notes = self.detect_notes_by_intersection(image_name, original_image, staff_lines, save_preview)
+            notes = self.detect_notes_by_intersection(image_name, resized_image, staff_lines, save_preview)
 
             if not notes:
                 self.logger.error("No notes detected")
