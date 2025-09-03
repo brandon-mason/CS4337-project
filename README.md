@@ -22,28 +22,36 @@ A Python-based computer vision project that reads clean, computer-generated shee
 ## Installation
 
 1. **Clone or download this project**
+```bash
+git clone https://github.com/brandon-mason/CS4337-project.git
+```
 
-2. **Install Python dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
+2. **Create a virtual environment**:
+```bash
+python3 -m venv .venv
+```
 
-3. **Install FluidSynth system dependencies**:
+3. **Install Python dependencies**:
+```bash
+pip install -r requirements.txt
+```
+
+4. **Install FluidSynth system dependencies**:
 
    **On macOS**:
-   ```bash
-   brew install fluid-synth
-   ```
+```bash
+brew install fluid-synth
+```
 
    **On Ubuntu/Debian**:
-   ```bash
-   sudo apt-get install fluidsynth
-   ```
+```bash
+sudo apt-get install fluidsynth
+```
 
    **On Windows**:
    Download FluidSynth from the official website or use a package manager like Chocolatey.
 
-4. **Download a SoundFont file** (optional):
+5. **Download a SoundFont file** (optional):
    - Download a free SoundFont
    - Place it in the soundfonts folder in the project directory 
 
@@ -51,31 +59,27 @@ A Python-based computer vision project that reads clean, computer-generated shee
 
 ### Basic Usage
 
-1. **Generate test sheet music** (for testing):
-   ```bash
-   python test_sheet_music.py
-   ```
+1. **Run the demo** (plays a C major scale):
+```bash
+python3 main.py
+```
 
-2. **Run the demo** (plays a C major scale):
-   ```bash
-   python main.py
-   ```
-
-3. **Play sheet music from an image**:
-   ```bash
-   python main.py your_sheet_music.png
-   ```
+2. **Play sheet music from an image**:
+```bash
+python3 main.py <your_sheet_music>.png
+```
+Replace your_sheet_music.png with the name of a file in preview_directory
 
 ### Advanced Usage
 
 **Specify tempo**:
 ```bash
-python main.py sheet_music.png --tempo 140
+python3 main.py sheet_music.png --tempo 140
 ```
 
 **Use a custom SoundFont**:
 ```bash
-python main.py sheet_music.png --soundfont soundfont_file_name.sf2
+python3 main.py sheet_music.png --soundfont soundfont_file_name.sf2
 ```
 
 ### Command Line Options
@@ -88,43 +92,27 @@ python main.py sheet_music.png --soundfont soundfont_file_name.sf2
 ## How It Works
 
 ### 1. Image Preprocessing
-- Converts image to grayscale
-- Applies Gaussian blur to reduce noise
-- Uses adaptive thresholding for better contrast
-- Performs morphological operations to clean up the image
 
 ### 2. Staff Line Detection
-- Uses Hough Line Transform to detect horizontal lines
-- Groups nearby lines to identify the five staff lines
-- Calculates staff spacing for note positioning
 
 ### 3. Note Detection
-- Finds contours in the processed image
-- Filters by size to identify note heads
-- Analyzes fill ratio to determine note duration:
-  - Hollow circles = whole notes
-  - Partially filled = half notes
-  - Solid circles = quarter/eighth/sixteenth notes
 
 ### 4. Note Mapping
-- Maps y-positions to musical notes based on staff lines
-- Supports notes from C4 to C6 (treble clef range)
-- Determines note duration based on visual characteristics
 
 ### 5. Audio Playback
 - Uses FluidSynth for MIDI synthesis
 - Plays notes with appropriate durations
 - Supports adjustable tempo
 
-## Supported Note Types
+## Note Types
 
-| Note Type | Duration | Visual Characteristics |
-|-----------|----------|----------------------|
-| Whole Note | 4 beats | Hollow circle, no stem |
-| Half Note | 2 beats | Hollow circle with stem |
-| Quarter Note | 1 beat | Solid circle with stem |
-| Eighth Note | 0.5 beats | Solid circle with stem and flag |
-| Sixteenth Note | 0.25 beats | Solid circle with stem and double flag |
+| Supported | Note Type | Duration | Visual Characteristics |
+|-----------|-----------|----------|----------------------|
+| N | Whole Note | 4 beats | Hollow circle, no stem |
+| N | Half Note | 2 beats | Hollow circle with stem |
+| Y | Quarter Note | 1 beat | Solid circle with stem |
+| N | Eighth Note | 0.5 beats | Solid circle with stem and flag |
+| N | Sixteenth Note | 0.25 beats | Solid circle with stem and double flag |
 
 ## Supported Notes
 
@@ -192,6 +180,7 @@ project/
 
 ## TODO
 
+- Implement gradio 
 - Refine note sizes that are detected
 
 ## License
