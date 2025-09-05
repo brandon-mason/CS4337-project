@@ -1,28 +1,31 @@
-import string
-import cv2
-import numpy as np
-import fluidsynth
 import os
 import time
 from typing import List, Tuple, Dict, Optional
 import logging
 
+import cv2
+import numpy as np
+
+import sf2_loader as sf
+
+from generate_audio import AudioGenerator
+
 class SheetMusicPlayer:
     """
     A computer vision-based sheet music player that reads musical notation
-    and plays it using FluidSynth.
+    and plays it using sf2_loader.
     
-    Supports whole notes, half notes, quarter notes, eighth notes, and sixteenth notes.
+    Currently supports quarter notes.
     """
     
-    def __init__(self, soundfont: str = None):
+    def __init__(self, soundfont: str='soundfonts/Pokemon_Black_and_White.sf2'):
         """
         Initialize the sheet music player.
         
         Args:
             soundfont_path: Path to a SoundFont file (.sf2). If None, will try to use default.
         """
-        self.fs = None
+        self.loader = None
         self.soundfont_path = soundfont
         self.note_durations = {
             'whole': 4.0,
@@ -31,6 +34,11 @@ class SheetMusicPlayer:
             'eighth': 0.5,
             'sixteenth': 0.25
         }
+        self.save_preview = False
+
+        # Initialize soundfont loader
+        self.loader = sf.sf2_loader(self.soundfont_path)
+        self.loader < 5
         
         # MIDI note mapping for treble clef (C4 to C6)
         self.note_mapping = {
@@ -40,7 +48,6 @@ class SheetMusicPlayer:
         }
         
         self.setup_logging()
-        self.initialize_fluidsynth()
     
     def setup_logging(self):
         """Setup logging configuration."""
@@ -49,112 +56,83 @@ class SheetMusicPlayer:
             format='%(asctime)s - %(levelname)s - %(message)s'
         )
         self.logger = logging.getLogger(__name__)
-    
-    def initialize_fluidsynth(self):
-        """Initialize FluidSynth with a SoundFont."""
-        try:
-            self.fs = fluidsynth.Synth()
-            self.fs.start()
-            
-            # Try to load SoundFont
-            if self.soundfont_path and os.path.exists(self.soundfont_path):
-                sfid = self.fs.sfload(self.soundfont_path)
-                self.fs.program_select(0, sfid, 0, 8)
-                self.logger.info(f"Loaded SoundFont: {self.soundfont_path}")
-            else:
-                # Try to find a default SoundFont
-                default_paths = [
-                    "Pokemon_Black_and_White.sf2"
-                ]
-                
-                for path in default_paths:
-                    soundfont_path = f"soundfonts/{path}"
-                    if os.path.exists(soundfont_path):
-                        sfid = self.fs.sfload(soundfont_path)
-                        self.fs.program_select(0, sfid, 0, 0)
-                        self.logger.info(f"Loaded default SoundFont: {soundfont_path}")
-                        break
-                else:
-                    self.logger.warning("No SoundFont found. Audio playback may not work.")
-            
-        except Exception as e:
-            self.logger.error(f"Failed to initialize FluidSynth: {e}")
-            self.fs = None
 
-    def preview_image(self, image: np.ndarray, name: string="image.png"):
+    def preview_image(self, image: np.ndarray, name: str="image.png"):
+        """
+        Displays the provided image in a window.
+        This should only be used for debugging in CLI mode.
+        
+        Args:
+            image: The image to display
+            name: The name of the window
+            
+        Returns:
+            Preprocessed image as numpy array
+        """
         cv2.imshow(name, image)
         cv2.waitKey(0)
         cv2.destroyAllWindows()
+        return
     
-    # def preprocess_image(self, image_path: str, save_preview: bool = False) -> np.ndarray:
-    #     """
-    #     Preprocess the sheet music image for better note detection.
+    def preprocess_image(self, image: np.ndarray, save_preview: bool = False, image_name = "image") -> np.ndarray:
+        """
+        Preprocess the sheet music image for better note detection.
         
-    #     Args:
-    #         image_path: Path to the sheet music image
-    #         save_preview: Whether to save preview images of processing steps
+        Args:
+            image_path: Path to the sheet music image
+            save_preview: Whether to save preview images of processing steps
             
-    #     Returns:
-    #         Preprocessed image as numpy array
-    #     """
-    #     # Read image
-    #     image = cv2.imread(image_path)
-    #     if image is None:
-    #         raise ValueError(f"Could not read image: {image_path}")
+        Returns:
+            Preprocessed image as numpy array
+        """
+        # Convert to HSV color space because we are using color-based segmentation to detect notes
+        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+        # self.preview_image(hsv, "hsv")
         
-    #     # Convert to grayscale
-    #     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        # Define range for black/dark lines (staff lines are usually black)
+        # You can adjust these values based on your image
+        lower_black = np.array([0, 0, 0])
+        upper_black = np.array([180, 255, 50])
+        
+        # Create mask for dark lines
+        mask = cv2.inRange(hsv, lower_black, upper_black)
+        # self.preview_image(mask, "mask")
 
-    #     # Invert the image
-    #     inverted = cv2.bitwise_not(gray)
-        
-    #     # Apply Gaussian blur to reduce noise
-    #     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-        
-    #     # Apply adaptive thresholding
-    #     thresh = cv2.adaptiveThreshold(
-    #         blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2
-    #     )
-        
-    #     # Morphological operations to clean up the image
-    #     kernel = np.ones((3, 3), np.uint8)
-    #     cleaned = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
-    #     cleaned = cv2.morphologyEx(cleaned, cv2.MORPH_OPEN, kernel)
-        
-    #     # Save preview images if requested
-    #     if save_preview:
-    #         base_name = os.path.splitext(os.path.basename(image_path))[0]
-    #         try:
-    #             os.makedirs('preview_directory', exist_ok=True)
-    #             print(f"Directory 'preview_directory' created or already exists.")
-    #         except OSError as e:
-    #             print(f"Error creating directory 'preview_directory': {e}")
+        # Save preview images if requested
+        if self.save_preview:
+            try:
+                if not os.path.isdir('preview_directory'):
+                    os.makedirs('preview_directory', exist_ok=True)
+                    print(f"Directory 'preview_directory' created.")
+                os.chdir('preview_directory')
+            except OSError as e:
+                print(f"Error creating directory 'preview_directory': {e}")
 
-    #         os.chdir('preview_directory')
 
-    #         # Save original
-    #         cv2.imwrite(f"{base_name}_original.png", image)
+            try:
+                if not os.path.isdir(image_name):
+                    os.makedirs(image_name, exist_ok=True)
+                    print(f"Directory '{image_name}' created.")
+                os.chdir(image_name)
+            except OSError as e:
+                print(f"Error creating directory '{image_name}': {e}")
 
-    #         # Save inverted
-    #         cv2.imwrite(f"{base_name}_inverted.png", inverted)
-            
-    #         # Save grayscale
-    #         cv2.imwrite(f"{base_name}_grayscale.png", gray)
-            
-    #         # Save blurred
-    #         cv2.imwrite(f"{base_name}_blurred.png", blurred)
-            
-    #         # Save thresholded
-    #         cv2.imwrite(f"{base_name}_threshold.png", thresh)
-            
-    #         # Save final cleaned
-    #         cv2.imwrite(f"{base_name}_cleaned.png", cleaned)
-            
-    #         self.logger.info(f"Preview images saved: {base_name}_*.png")
-        
-    #     return cleaned
+            # Save original
+            cv2.imwrite(f"{image_name}_original.png", image)
+
+            # Save HSV version
+            cv2.imwrite(f"{image_name}_hsv.png", hsv)
+
+            # Save mask
+            cv2.imwrite(f"{image_name}_mask.png", mask)
+
+            self.logger.info(f"Preview images saved: {image_name}_*.png")
+
+            os.chdir("../..")
+
+        return mask
     
-    def detect_staff_lines(self, image: np.ndarray) -> List[Dict]:
+    def detect_staff_lines(self, image: np.ndarray, save_preview: bool=False, image_name: str = "image") -> List[Dict]:
         """
         Detect horizontal staff lines in the sheet music by color.
         
@@ -164,25 +142,15 @@ class SheetMusicPlayer:
         Returns:
             List of staff line dictionaries with coordinates
         """
-        # Convert to HSV for better color detection
-        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-        
-        # Define range for black/dark lines (staff lines are usually black)
-        # You can adjust these values based on your image
-        lower_black = np.array([0, 0, 0])
-        upper_black = np.array([180, 255, 50])
-        
-        # Create mask for dark lines
-        mask = cv2.inRange(hsv, lower_black, upper_black)
-        self.preview_image(mask, "mask")
-        
+        processed_image = self.preprocess_image(image, save_preview, image_name)
+
         # Find horizontal lines using morphological operations
         # Create horizontal kernel
         horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (105, 1))
         
         # Detect horizontal lines
-        horizontal_lines = cv2.morphologyEx(mask, cv2.MORPH_OPEN, horizontal_kernel)
-        self.preview_image(horizontal_lines, "hl")
+        horizontal_lines = cv2.morphologyEx(processed_image, cv2.MORPH_OPEN, horizontal_kernel)
+        # self.preview_image(horizontal_lines, "hl")
         
         # Find contours of horizontal lines
         contours, _ = cv2.findContours(horizontal_lines, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -256,7 +224,7 @@ class SheetMusicPlayer:
 
         return original_image, staff_lines
     
-    def detect_notes_by_intersection(self, image_name: str, image: np.ndarray, staff_lines: List[Dict], save_preview: bool = False) -> List[Dict]:
+    def detect_notes_by_intersection(self, image: np.ndarray, staff_lines: List[Dict], save_preview: bool = False, image_name: str = "image") -> List[Dict]:
         """
         Detect musical notes by checking intersections with staff lines.
         
@@ -375,19 +343,31 @@ class SheetMusicPlayer:
 
         if save_preview:
             try:
-                os.makedirs('preview_directory', exist_ok=True)
-                print(f"Directory 'preview_directory' created or already exists.")
+                if not os.path.isdir('preview_directory'):
+                    os.makedirs('preview_directory', exist_ok=True)
+                    print(f"Directory 'preview_directory' created or already exists.")
+                else:
+                    os.chdir('preview_directory')
             except OSError as e:
                 print(f"Error creating directory 'preview_directory': {e}")
 
-            os.chdir('preview_directory')
+            try:
+                if not os.path.isdir(image_name):
+                    os.makedirs(image_name, exist_ok=True)
+                    print(f"Directory '{image_name}' created or already exists.")
+                else:
+                    os.chdir(image_name)
+            except OSError as e:
+                print(f"Error creating directory '{image_name}': {e}")
 
             # Save original
             cv2.imwrite(f"{image_name.split(".")[0]}_detection.png", vis_image)
             
             self.logger.info(f"Preview image saved: {image_name.split(".")[0]}_detection.png")
 
-        self.preview_image(vis_image, f"{image_name.split(".")[0]}_detection_visualization")
+            os.chdir("../..")
+
+        # self.preview_image(vis_image, f"{image_name.split(".")[0]}_detection_visualization")
         
         # Sort notes by x-position (left to right)
         notes.sort(key=lambda x: x['x'])
@@ -460,27 +440,26 @@ class SheetMusicPlayer:
             # This is a simplified approach
             return 'eighth'
     
-    def play_note(self, midi_note: int, duration: float, velocity: int = 100):
+    def play_note(self, note_name: str, duration: float, velocity: int = 100, tempo: float = 120.0):
         """
-        Play a single note using FluidSynth.
+        Play a single note using sf2_loader.
         
         Args:
-            midi_note: MIDI note number
+            note_name: MIDI note number
             duration: Duration in seconds
             velocity: Note velocity (0-127)
         """
-        if self.fs is None:
-            self.logger.warning("FluidSynth not initialized. Cannot play note.")
+        if self.loader is None:
+            self.logger.warning("sf2_loader not initialized. Cannot play note.")
             return
         
         try:
-            self.fs.noteon(0, midi_note, velocity)
+            self.loader.play_note(note_name=note_name, duration=duration, volume=velocity, bpm=tempo)
             time.sleep(duration)
-            self.fs.noteoff(0, midi_note)
         except Exception as e:
-            self.logger.error(f"Error playing note {midi_note}: {e}")
-    
-    def play_sheet_music(self, image_name: str, tempo: float = 120.0, save_preview: bool = False):
+            self.logger.error(f"Error playing note {note_name}: {e}")
+            
+    def play_sheet_music_image(self, original_image: np.ndarray, tempo: float = 120.0, save_preview: bool = False, image_name: str = "image"):
         """
         Read and play sheet music using color-based detection for staff lines and note intersections.
         
@@ -490,8 +469,68 @@ class SheetMusicPlayer:
             save_preview: Whether to save preview images of processing steps
         """
         try:
-            self.logger.info(f"Processing sheet music: {image_name}")
+            self.save_preview = save_preview
+            self.logger.info(f"Processing sheet music: ")
             
+            # Initialize AudioGenerator
+            generator = AudioGenerator(self.soundfont_path, self.note_mapping, self.note_durations)
+            
+            # Detect staff lines
+            staff_lines = self.detect_staff_lines(original_image, self.save_preview)
+
+            if not staff_lines:
+                self.logger.error("No staff lines detected")
+                return
+
+            # Resize image based on staff size
+            resized_image, resized_staff_lines = self.resize_by_staff_height(original_image, staff_lines)
+            
+            self.logger.info(f"Detected {len(resized_staff_lines)} staff lines")
+
+            if len(staff_lines) != 5:
+                self.logger.error("Invalid sheet music format")
+                return
+
+            # Detect notes by intersection
+            notes = self.detect_notes_by_intersection(resized_image, staff_lines, save_preview, image_name)
+
+            if not notes:
+                self.logger.error("No notes detected")
+                return
+            
+            self.logger.info(f"Detected {len(notes)} notes")
+
+            # Generate MIDI file from note data
+            out_dir = "output"
+            self.logger.info('Generating MIDI...')
+            generator.generate_midi(notes=notes, tempo=tempo, out_dir=out_dir)
+            self.logger.info('MIDI Generated!')
+
+            # Generate audio file from MIDI file
+            midi_file = "midi.mid"
+            self.logger.info('Generating Audio File...')
+            generator.generate_audio(midi_file=midi_file, out_dir=out_dir)
+            self.logger.info('Audio File Generated!')
+
+            self.logger.info('All done!')
+            
+        except Exception as e:
+            self.logger.error(f"Error processing sheet music: {e}")
+
+    def play_sheet_music_path(self, image_name: str, tempo: float=120.0, save_preview: bool=False):
+        """
+        Read and play sheet music using color-based detection for staff lines and note intersections.
+        
+        Args:
+            image_path: Path to the sheet music image
+            tempo: Tempo in beats per minute
+            save_preview: Whether to save preview images of processing steps
+        """
+        try:
+            # Initialize AudioGenerator
+            generator = AudioGenerator(self.soundfont_path, self.note_mapping, self.note_durations)
+
+            self.logger.info(f"Processing sheet music: {image_name}")
             # Read original image
             image_path = f"test_cases/{image_name}"
             original_image = cv2.imread(image_path)
@@ -514,31 +553,37 @@ class SheetMusicPlayer:
                 return
 
             # Detect notes by intersection
-            notes = self.detect_notes_by_intersection(image_name, resized_image, staff_lines, save_preview)
+            notes = self.detect_notes_by_intersection(resized_image, staff_lines, save_preview, image_name)
 
             if not notes:
                 self.logger.error("No notes detected")
                 return
-            
-            self.logger.info(f"Detected {len(notes)} notes")
-            
+
+            self.logger.info(f"Detected {len(notes)} notes, {tempo}")
+
             # Calculate beat duration
             beat_duration = 60.0 / tempo
-            
+
+            # Generate MIDI file from note data
+            out_dir = "output"
+            self.logger.info('Generating MIDI...')
+            generator.generate_midi(notes=notes, tempo=tempo, out_dir=out_dir)
+            self.logger.info('MIDI Generated!')
+
+            # Generate audio file from MIDI file
+            midi_file = "midi.mid"
+            self.logger.info('Generating Audio File...')
+            generator.generate_audio(midi_file=midi_file, out_dir=out_dir)
+            self.logger.info('Audio File Generated!')
+
             # Play notes
             self.logger.info("Starting playback...")
             for i, note in enumerate(notes):
                 duration = self.note_durations[note['duration']] * beat_duration
                 self.logger.info(f"Playing {note['note']} ({note['duration']}) for {duration:.2f}s")
-                self.play_note(note['midi_note'], duration)
+                self.play_note(note_name=note['note'], duration=duration, tempo=tempo)
             
             self.logger.info("Playback complete")
             
         except Exception as e:
             self.logger.error(f"Error processing sheet music: {e}")
-    
-    def cleanup(self):
-        """Clean up FluidSynth resources."""
-        if self.fs:
-            self.fs.delete()
-            self.fs = None

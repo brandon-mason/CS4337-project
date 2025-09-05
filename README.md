@@ -1,22 +1,22 @@
 # Computer Vision Sheet Music Player
 
-A Python-based computer vision project that reads clean, computer-generated sheet music and plays it using FluidSynth. The system can recognize and play whole notes, half notes, quarter notes, eighth notes, and sixteenth notes.
+A Python-based computer vision project that reads clean, computer-generated sheet music and exports it to midi and audio. The system can recognize and play quarter notes, with plans to add whole notes, half notes, eighth notes, and sixteenth notes.
 
 ## Features
 
 - **Computer Vision**: Uses OpenCV for image processing and music notation detection
 - **Note Recognition**: Detects musical notes from whole notes to sixteenth notes
-- **Audio Playback**: Uses FluidSynth for high-quality MIDI audio synthesis
+- **MIDI File Generation**: Generates a MIDI file based on what is read from the sheet music
+- **Audio File Generation**: Renders an audio file from the generated MIDI file
 - **Staff Detection**: Automatically detects staff lines and maps note positions
 - **Flexible Tempo**: Adjustable playback tempo (beats per minute)
 - **Multiple Note Types**: Supports various note durations and positions
 
 ## Requirements
 
-- Python 3.7+
+- Python 3.13 (Likely works on other versions but untested.)
 - OpenCV
 - NumPy
-- FluidSynth
 - A SoundFont file (.sf2) for audio synthesis
 
 ## Installation
@@ -31,25 +31,17 @@ git clone https://github.com/brandon-mason/CS4337-project.git
 python3 -m venv .venv
 ```
 
-3. **Install Python dependencies**:
+3. **Activate the environment**:
+```bash
+source .venv/bin/activate
+# or use the helper script:
+source activate.sh
+```
+
+4. **Install Python dependencies**:
 ```bash
 pip install -r requirements.txt
 ```
-
-4. **Install FluidSynth system dependencies**:
-
-   **On macOS**:
-```bash
-brew install fluid-synth
-```
-
-   **On Ubuntu/Debian**:
-```bash
-sudo apt-get install fluidsynth
-```
-
-   **On Windows**:
-   Download FluidSynth from the official website or use a package manager like Chocolatey.
 
 5. **Download a SoundFont file** (optional):
    - Download a free SoundFont
@@ -57,16 +49,23 @@ sudo apt-get install fluidsynth
 
 ## Usage
 
-### Basic Usage
+### Basic Usage (Make sure the virtual environment is running)
+
+1. **Run the Gradio interface**:
+```bash
+python gradio_interface.py
+```
+
+OR
 
 1. **Run the demo** (plays a C major scale):
 ```bash
-python3 main.py
+python main.py
 ```
 
 2. **Play sheet music from an image**:
 ```bash
-python3 main.py <your_sheet_music>.png
+python main.py <your_sheet_music>.png
 ```
 Replace your_sheet_music.png with the name of a file in preview_directory
 
@@ -74,12 +73,17 @@ Replace your_sheet_music.png with the name of a file in preview_directory
 
 **Specify tempo**:
 ```bash
-python3 main.py sheet_music.png --tempo 140
+python main.py sheet_music.png --tempo 140
 ```
 
 **Use a custom SoundFont**:
 ```bash
-python3 main.py sheet_music.png --soundfont soundfont_file_name.sf2
+python main.py sheet_music.png --soundfont soundfont_file_name.sf2
+```
+
+**Save Generated Images**:
+```bash
+python main.py sheet_music.png --preview
 ```
 
 ### Command Line Options
@@ -100,8 +104,8 @@ python3 main.py sheet_music.png --soundfont soundfont_file_name.sf2
 ### 4. Note Mapping
 
 ### 5. Audio Playback
-- Uses FluidSynth for MIDI synthesis
-- Plays notes with appropriate durations
+- Uses MidiUtil to create a midi file
+- Uses sf2_loader to generate a wav file from the midi file
 - Supports adjustable tempo
 
 ## Note Types
@@ -117,9 +121,7 @@ python3 main.py sheet_music.png --soundfont soundfont_file_name.sf2
 ## Supported Notes
 
 The system currently supports notes in the treble clef range:
-- C4, D4, E4, F4, G4, A4, B4
-- C5, D5, E5, F5, G5, A5, B5
-- C6
+- C4, D4, E4, F4, G4, A4, B4, C5
 
 ## File Structure
 
@@ -153,7 +155,6 @@ project/
    - Try the provided test images first to verify the system works
 
 4. **Audio not playing**:
-   - Verify FluidSynth is properly installed
    - Check that a SoundFont is loaded
    - Ensure your system's audio is working
 
@@ -180,7 +181,6 @@ project/
 
 ## TODO
 
-- Implement gradio 
 - Refine note sizes that are detected
 
 ## License

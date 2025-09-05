@@ -17,13 +17,13 @@ def read_requirements():
         return [line.strip() for line in fh if line.strip() and not line.startswith("#")]
 
 setup(
-    name="sheet-music-player",
+    name="CS4337-project",
     version="1.0.0",
     author="Computer Vision Project",
-    description="A computer vision-based sheet music player using OpenCV and FluidSynth",
+    description="A computer vision-based sheet music player using OpenCV",
     long_description=read_readme(),
     long_description_content_type="text/markdown",
-    url="https://github.com/yourusername/sheet-music-player",
+    url="https://github.com/brandon-mason/CS4337-project",
     packages=find_packages(),
     classifiers=[
         "Development Status :: 4 - Beta",
@@ -45,15 +45,14 @@ setup(
     install_requires=read_requirements(),
     entry_points={
         "console_scripts": [
-            "sheet-music-player=main:main",
+            "CS4337-project=main:main",
         ],
     },
     include_package_data=True,
     zip_safe=False,
-    keywords="computer-vision, music, sheet-music, midi, fluidsynth, opencv",
+    keywords="computer-vision, music, sheet-music, midi, opencv, midi",
     project_urls={
-        "Bug Reports": "https://github.com/yourusername/sheet-music-player/issues",
-        "Source": "https://github.com/yourusername/sheet-music-player",
-        "Documentation": "https://github.com/yourusername/sheet-music-player#readme",
+        "Source": "https://github.com/brandon-mason/CS4337-project",
+        "Documentation": "https://github.com/brandon-mason/CS4337-project#readme",
     },
 )

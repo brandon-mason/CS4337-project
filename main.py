@@ -68,15 +68,15 @@ Examples:
         print("Press Ctrl+C to stop playback")
         print("-" * 50)
 
-        player.play_sheet_music(args.image_path, args.tempo, save_preview=args.preview)
+        player.play_sheet_music_path(args.image_path, args.tempo, save_preview=args.preview)
         
     except KeyboardInterrupt:
         print("\nPlayback interrupted by user")
     except Exception as e:
         print(f"Error: {e}")
         sys.exit(1)
-    finally:
-        player.cleanup()
+    # finally:
+        # player.cleanup()
 
 def demo_mode():
     """Run in demo mode with a simple test pattern."""

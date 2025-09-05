@@ -14,9 +14,9 @@ Your Computer Vision Sheet Music Player project is now ready to use!
 
 1. **Activate the environment**:
    ```bash
-   source venv/bin/activate
+   source .venv/bin/activate
    # or use the helper script:
-   ./activate.sh
+   source activate.sh
    ```
 
 2. **Run the demo**:
@@ -38,10 +38,9 @@ Your Computer Vision Sheet Music Player project is now ready to use!
 
 ```
 project/
-├── venv/                          # Virtual environment
+├── .venv/                          # Virtual environment
 ├── sheet_music_player.py          # Main player class
 ├── main.py                        # Command line interface
-├── test_sheet_music.py            # Test image generator
 ├── example_usage.py               # Example usage
 ├── requirements.txt               # Python dependencies
 ├── README.md                      # Complete documentation
