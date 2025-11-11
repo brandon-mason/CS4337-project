@@ -242,10 +242,11 @@ class SheetMusicPlayer:
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
         # Apply threshold to get binary image
-        _, binary = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY_INV)
+        binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2)
         
         # Use the binary image directly - we'll filter contours instead
         note_heads = binary.copy()
+        cv2.imshow("note_heads", note_heads)
         
         # Also create a version that detects hollow circles (whole notes)
         # Use morphological operations to find circular shapes
@@ -258,12 +259,21 @@ class SheetMusicPlayer:
         
         # Combine both sets of contours
         contours = contours_filled + contours_hollow
+
         
         # Create visualization image
         vis_image = image.copy()
+        viss_image = image.copy()
+        visss_image = image.copy()
         
         # Draw all contours for debugging
         cv2.drawContours(vis_image, contours, -1, (0,255,0), 1)
+        cv2.drawContours(viss_image, contours_filled, -1, (0,255,0), 1)
+        cv2.drawContours(visss_image, contours_hollow, -1, (0,255,0), 1)
+
+        self.preview_image(vis_image, 'contours')
+        self.preview_image(viss_image, 'filled')
+        self.preview_image(visss_image, 'hollow')
         
         for contour in contours:
             # Get bounding rectangle
@@ -308,7 +318,7 @@ class SheetMusicPlayer:
                     filled_ratio = np.sum(roi == 255) / (w * h)
                     
                     # Determine note duration based on fill ratio
-                    if filled_ratio > 0.6:
+                    if filled_ratio > 0.35:
                         duration = 'quarter'  # Solid note head
                     elif filled_ratio > 0.2:
                         duration = 'half'     # Partially filled
@@ -367,8 +377,7 @@ class SheetMusicPlayer:
 
             os.chdir("../..")
 
-        # self.preview_image(vis_image, f"{image_name.split(".")[0]}_detection_visualization")
-        
+        self.preview_image(vis_image, f"{image_name.split(".")[0]}_detection_visualization")
         # Sort notes by x-position (left to right)
         notes.sort(key=lambda x: x['x'])
         
@@ -440,6 +449,8 @@ class SheetMusicPlayer:
             # This is a simplified approach
             return 'eighth'
     
+
+    
     def play_note(self, note_name: str, duration: float, velocity: int = 100, tempo: float = 120.0):
         """
         Play a single note using sf2_loader.
@@ -484,6 +495,7 @@ class SheetMusicPlayer:
 
             # Resize image based on staff size
             resized_image, resized_staff_lines = self.resize_by_staff_height(original_image, staff_lines)
+            cleaned_image = self.remove_staff_lines(resized_image)
             
             self.logger.info(f"Detected {len(resized_staff_lines)} staff lines")
 
@@ -492,7 +504,7 @@ class SheetMusicPlayer:
                 return
 
             # Detect notes by intersection
-            notes = self.detect_notes_by_intersection(resized_image, staff_lines, save_preview, image_name)
+            notes = self.detect_notes_by_intersection(cleaned_image_image, staff_lines, save_preview, image_name)
 
             if not notes:
                 self.logger.error("No notes detected")
@@ -553,7 +565,11 @@ class SheetMusicPlayer:
                 return
 
             # Detect notes by intersection
-            notes = self.detect_notes_by_intersection(resized_image, staff_lines, save_preview, image_name)
+            
+            cleaned_image = self.remove_staff_lines(resized_image)
+            refilled_image = self.refill_notes(cleaned_image)
+            self.preview_image(refilled_image, "Without staff lines")
+            notes = self.detect_notes_by_intersection(refilled_image, staff_lines, save_preview, image_name)
 
             if not notes:
                 self.logger.error("No notes detected")
@@ -587,3 +603,72 @@ class SheetMusicPlayer:
             
         except Exception as e:
             self.logger.error(f"Error processing sheet music: {e}")
+
+    def remove_staff_lines(self, image: np.ndarray) -> np.ndarray:
+        """
+        Remove staff lines from a sheet music image.
+        
+        Args:
+            image: Original sheet music image (BGR or grayscale)
+        
+        Returns:
+            Image with staff lines removed
+        """
+        # Convert to grayscale
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        
+        # Threshold to get binary image (invert to make staff lines white)
+        _, binary = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY_INV)
+        
+        # Define horizontal kernel (same as in detect_staff_lines)
+        horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (100, 1))
+        
+        # Detect horizontal lines
+        detected_lines = cv2.morphologyEx(binary, cv2.MORPH_OPEN, horizontal_kernel, iterations=2)
+        
+        # Subtract the staff lines from the binary image
+        no_staff = cv2.subtract(binary, detected_lines)
+        
+        # Invert back to normal (black lines on white)
+        cleaned = cv2.bitwise_not(no_staff)
+        if len(cleaned.shape) == 2:
+            cleaned = cv2.cvtColor(cleaned, cv2.COLOR_GRAY2BGR)
+        
+        return cleaned
+    
+    def refill_notes(self, image):
+        """
+        Restore note heads that were partially removed with staff line removal.
+        Uses morphological operations to close gaps and refill circles.
+        
+        Args:
+            image: Cleaned BGR or grayscale image (after staff line removal)
+        
+        Returns:
+            Image with note heads refilled
+        """
+        # Convert to grayscale if necessary
+        if len(image.shape) == 3:
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = image.copy()
+
+        # Convert to binary (invert so black = background, white = foreground)
+        _, binary = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY_INV)
+
+        # Close small gaps in note heads 
+        # Try a circular/elliptical kernel that roughly matches note size
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        closed = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=2)
+
+        # Optionally, dilate slightly to thicken notes ---
+        kernel_dilate = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        dilated = cv2.dilate(closed, kernel_dilate, iterations=1)
+
+        # Invert back to normal (black notes on white) ---
+        refilled = cv2.bitwise_not(dilated)
+        if len(refilled.shape) == 2:
+            refilled = cv2.cvtColor(refilled, cv2.COLOR_GRAY2BGR)
+        return refilled
+
+    

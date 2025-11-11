@@ -45,19 +45,19 @@ player = SheetMusicPlayer()
 
 def wrapper2(image, tempo, image_name, save_preview):
     save_prev = len(save_preview) > 0 and save_preview[0] == "Save"
+
+    # Run your CV + audio pipeline
     player.play_sheet_music_image(image, tempo, save_prev, image_name)
 
+    audio_path = "output/output.wav"
+
     if save_prev:
-        # Show both, supplying filepaths for image and audio
-        return (
-            gr.Audio(value="output/output.wav", visible=True),
-            gr.Image(value=f"preview_directory/{image_name}/{image_name}_detection.png", visible=True),
-        )
+        image_path = f"preview_directory/{image_name}/{image_name}_detection.png"
     else:
-        return (
-            gr.Audio(value="output/output.wav", visible=True),
-            gr.Image(value=None, visible=False),
-        )
+        image_path = None
+
+    # Return filepaths / None, NOT components
+    return audio_path, image_path
 
 with gr.Blocks() as demo:
     image = gr.Image(label="Input")
