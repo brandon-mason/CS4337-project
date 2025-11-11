@@ -85,52 +85,24 @@ class SheetMusicPlayer:
         Returns:
             Preprocessed image as numpy array
         """
-        # Convert to HSV color space because we are using color-based segmentation to detect notes
-        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-        # self.preview_image(hsv, "hsv")
-        
-        # Define range for black/dark lines (staff lines are usually black)
-        # You can adjust these values based on your image
-        lower_black = np.array([0, 0, 0])
-        upper_black = np.array([180, 255, 50])
-        
-        # Create mask for dark lines
-        mask = cv2.inRange(hsv, lower_black, upper_black)
-        # self.preview_image(mask, "mask")
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-        # Save preview images if requested
-        if self.save_preview:
-            try:
-                if not os.path.isdir('preview_directory'):
-                    os.makedirs('preview_directory', exist_ok=True)
-                    print(f"Directory 'preview_directory' created.")
-                os.chdir('preview_directory')
-            except OSError as e:
-                print(f"Error creating directory 'preview_directory': {e}")
+        # Light contrast enhancement
+        clahe = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(8,8))
+        enhanced = clahe.apply(gray)
 
-
-            try:
-                if not os.path.isdir(image_name):
-                    os.makedirs(image_name, exist_ok=True)
-                    print(f"Directory '{image_name}' created.")
-                os.chdir(image_name)
-            except OSError as e:
-                print(f"Error creating directory '{image_name}': {e}")
-
-            # Save original
-            cv2.imwrite(f"{image_name}_original.png", image)
-
-            # Save HSV version
-            cv2.imwrite(f"{image_name}_hsv.png", hsv)
-
-            # Save mask
-            cv2.imwrite(f"{image_name}_mask.png", mask)
-
-            self.logger.info(f"Preview images saved: {image_name}_*.png")
-
-            os.chdir("../..")
-
-        return mask
+        # Adaptive threshold with larger block size and smaller constant
+        # Larger blockSize (e.g., 51-101) preserves more detail
+        # Smaller C value (e.g., 5-8) makes threshold less aggressive
+        thresh = cv2.adaptiveThreshold(
+            enhanced, 255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY_INV, 
+            blockSize=101,  # Increased from 35
+            C=3            # Reduced from 11
+        )
+        self.preview_image(thresh, 'thesh')
+        return thresh
     
     def detect_staff_lines(self, image: np.ndarray, save_preview: bool=False, image_name: str = "image") -> List[Dict]:
         """
@@ -224,7 +196,7 @@ class SheetMusicPlayer:
 
         return original_image, staff_lines
     
-    def detect_notes_by_intersection(self, image: np.ndarray, staff_lines: List[Dict], save_preview: bool = False, image_name: str = "image") -> List[Dict]:
+    def detect_notes_by_intersection(self, image: np.ndarray, staff_lines: List[Dict], save_preview: bool = False, image_name: str = "image", original_image: np.ndarray = None) -> List[Dict]:
         """
         Detect musical notes by checking intersections with staff lines.
         
@@ -237,150 +209,98 @@ class SheetMusicPlayer:
             List of detected notes with their properties
         """
         notes = []
-
-        # Convert to grayscale for better note detection
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-
-        # Apply threshold to get binary image
-        binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2)
-        
-        # Use the binary image directly - we'll filter contours instead
-        note_heads = binary.copy()
-        cv2.imshow("note_heads", note_heads)
-        
-        # Also create a version that detects hollow circles (whole notes)
-        # Use morphological operations to find circular shapes
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
-        hollow_circles = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
-        
-        # Find contours of potential notes (both filled and hollow)
-        contours_filled, _ = cv2.findContours(note_heads, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        contours_hollow, _ = cv2.findContours(hollow_circles, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        # Combine both sets of contours
-        contours = contours_filled + contours_hollow
-
-        
+        # image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         # Create visualization image
-        vis_image = image.copy()
-        viss_image = image.copy()
-        visss_image = image.copy()
-        
-        # Draw all contours for debugging
-        cv2.drawContours(vis_image, contours, -1, (0,255,0), 1)
-        cv2.drawContours(viss_image, contours_filled, -1, (0,255,0), 1)
-        cv2.drawContours(visss_image, contours_hollow, -1, (0,255,0), 1)
+        vis_image = original_image.copy()
 
-        self.preview_image(vis_image, 'contours')
-        self.preview_image(viss_image, 'filled')
-        self.preview_image(visss_image, 'hollow')
+        min_notehead_aspect = 0.7
+        max_notehead_aspect = 1.7
+        self.preview_image(image)
+
+        contours, _ = self.extract_note_contours_from_clean(image)
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        print(len(image.shape))
+        print(len(contours))
+
+        cv2.drawContours(vis_image, contours, -1, (0,255,0), 1)
+
+        self.preview_image(vis_image, 'cont')
         
         for contour in contours:
-            # Get bounding rectangle
+            print('contour', len(contours))
+            # Get bounding box of the contour
             x, y, w, h = cv2.boundingRect(contour)
-            # Filter by size to find note heads - look for more circular note heads
-            aspect_ratio = w / h if h > 0 else 0
+            roi = image[y:y+h, x:x+w]
 
-            # Look for note heads: circular/square objects that are not too thin
-            # Filter out tenuto marks (very thin horizontal lines) and staff lines (very wide)
-            # Also look for smaller objects that might be note heads
-            is_note_head = ((15 < w < 125 and 10 < h < 125 and 0.4 < aspect_ratio < 2.5 and w * h > 20) or
-                           (15 < w < 125 and 10 < h < 125 and 0.5 < aspect_ratio < 2.0 and w * h > 50))
-            
-            if is_note_head:
-                # Check if this contour intersects with any staff line
-                note_center_y = y + h // 2
-                note_center_x = x + w // 2
-                
-                # Check intersection with staff lines
-                intersecting_line = None
-                min_distance = float('inf')
-                
-                for staff_line in staff_lines:
-                    line_y = staff_line["y"]
-                    line_x1 = staff_line["x1"]
-                    line_x2 = staff_line["x2"]
-                    
-                    # Check if note is within the horizontal range of the staff line
-                    if line_x1 <= note_center_x <= line_x2:
-                        # Calculate vertical distance to this staff line
-                        distance = abs(note_center_y - line_y)
-                        
-                        # Find the closest staff line within reasonable distance
-                        if distance < min_distance and distance < 300:  # Much more tolerant
-                            min_distance = distance
-                            intersecting_line = staff_line
-                
-                if intersecting_line:
-                    # This is likely a note on a staff line
-                    # Determine note type based on fill (solid vs hollow)
-                    roi = note_heads[y:y+h, x:x+w]
-                    filled_ratio = np.sum(roi == 255) / (w * h)
-                    
-                    # Determine note duration based on fill ratio
-                    if filled_ratio > 0.35:
-                        duration = 'quarter'  # Solid note head
-                    elif filled_ratio > 0.2:
-                        duration = 'half'     # Partially filled
-                    else:
-                        duration = 'whole'    # Hollow note head
-                    
-                    # Map y-position to note name
-                    note_name = self.map_position_to_note(note_center_y, [line["y"] for line in staff_lines])
-                    
-                    if note_name:
-                        notes.append({
-                            'x': x,
-                            'y': y,
-                            'note': note_name,
-                            'duration': duration,
-                            'midi_note': self.note_mapping.get(note_name, 60),
-                            'staff_line': intersecting_line
-                        })
-                        
-                        # Draw detection on visualization
-                        cv2.rectangle(vis_image, (x, y), (x + w, y + h), (0, 255, 0), 2)
-                        cv2.putText(vis_image, f"{note_name} ({duration})", 
-                                   (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-                        
-                        # Draw center point
-                        cv2.circle(vis_image, (note_center_x, note_center_y), 3, (255, 0, 0), -1)
-        
-        # Draw staff lines on visualization
-        for staff_line in staff_lines:
-            cv2.line(vis_image, (staff_line["x1"], staff_line["y"]), 
-                    (staff_line["x2"], staff_line["y"]), (255, 0, 0), 2)
+            M = cv2.moments(contour)
+            cx = int(M['m10']/M['m00']) if M['m00'] != 0 else 0
+            cy = int(M['m01']/M['m00']) if M['m00'] != 0 else 0
 
-        if save_preview:
-            try:
-                if not os.path.isdir('preview_directory'):
-                    os.makedirs('preview_directory', exist_ok=True)
-                    print(f"Directory 'preview_directory' created or already exists.")
+            rect = cv2.minAreaRect(contour)
+            box = cv2.boxPoints(rect)
+            box = np.intp(box)
+
+            # Find connected components in the bounding box
+            num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(roi)
+            # skip the background label 0
+            best_component = None
+            best_score = 0
+            for i in range(1, num_labels):
+                w_blob, h_blob = stats[i, cv2.CC_STAT_WIDTH], stats[i, cv2.CC_STAT_HEIGHT]
+                aspect = w_blob / (h_blob + 1e-5)
+                area = stats[i, cv2.CC_STAT_AREA]
+                # Prefer blobs with reasonable aspect and significant size
+                if (min_notehead_aspect < aspect < max_notehead_aspect) and area > best_score:
+                    best_score = area
+                    best_component = i
+            if best_component:
+                self.logger.info("BEST FOUND")
+                cx, cy = centroids[best_component]
+                note_name = self.map_position_to_note(y + cy, [line["y"] for line in staff_lines])
+
+                mask = np.zeros_like(image)
+                cv2.drawContours(mask, [contour], -1, 255, -1)
+                filled_ratio = np.sum(image[mask==255]) / (255 * cv2.countNonZero(mask))
+                # Use a threshold: if filled_ratio < 0.5, it's filled; otherwise, hollow
+                is_filled = filled_ratio < 0.5
+                
+                # Determine note duration based on fill ratio
+                if filled_ratio > 0.6:
+                    duration = 'quarter'  # Solid note head
+                elif filled_ratio > 0.2:
+                    duration = 'half'     # Partially filled
                 else:
-                    os.chdir('preview_directory')
-            except OSError as e:
-                print(f"Error creating directory 'preview_directory': {e}")
+                    duration = 'whole'    # Hollow note head
 
-            try:
-                if not os.path.isdir(image_name):
-                    os.makedirs(image_name, exist_ok=True)
-                    print(f"Directory '{image_name}' created or already exists.")
-                else:
-                    os.chdir(image_name)
-            except OSError as e:
-                print(f"Error creating directory '{image_name}': {e}")
+                if note_name:
+                    notes.append({
+                        'x': x,
+                        'y': y,
+                        'note': note_name,
+                        'duration': duration,
+                        'midi_note': self.note_mapping.get(note_name, 60),
+                        # 'staff_line': intersecting_line
+                    })
+                    
+                    # Draw detection on visualization
+                    cv2.rectangle(vis_image, (x, y), (x + w, y + h), (0, 255, 0), 2)
+                    cv2.putText(vis_image, f"{note_name} ({duration})", 
+                                (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+                    print((int(x+cx), int(y+cy)))
+                    print((int(cx), int(cy)))
+                    print((x, y))
+                    # Draw center point
+                    cv2.circle(vis_image, (int(x+cx), int(y+cy)), 3, (0, 0, 255), -1)
+                    cv2.circle(vis_image, (int(cx), int(cy)), 3, (255, 0, 255), -1)
 
-            # Save original
-            cv2.imwrite(f"{image_name.split(".")[0]}_detection.png", vis_image)
-            
-            self.logger.info(f"Preview image saved: {image_name.split(".")[0]}_detection.png")
-
-            os.chdir("../..")
+                    # cv2.circle(vis_image, box[0], 3, (0, 0, 0), -1)
+                    # cv2.circle(vis_image, box[1], 3, (0, 0, 0), -1)
+                    # cv2.circle(vis_image, box[2], 3, (0, 0, 0), -1)
+                    # cv2.circle(vis_image, box[3], 3, (0, 0, 0), -1)
 
         self.preview_image(vis_image, f"{image_name.split(".")[0]}_detection_visualization")
         # Sort notes by x-position (left to right)
         notes.sort(key=lambda x: x['x'])
-        
         return notes
     
     def map_position_to_note(self, y_pos: int, staff_lines: List[int]) -> Optional[str]:
@@ -569,7 +489,7 @@ class SheetMusicPlayer:
             cleaned_image = self.remove_staff_lines(resized_image)
             refilled_image = self.refill_notes(cleaned_image)
             self.preview_image(refilled_image, "Without staff lines")
-            notes = self.detect_notes_by_intersection(refilled_image, staff_lines, save_preview, image_name)
+            notes = self.detect_notes_by_intersection(refilled_image, staff_lines, save_preview, image_name, original_image=resized_image)
 
             if not notes:
                 self.logger.error("No notes detected")
@@ -671,4 +591,29 @@ class SheetMusicPlayer:
             refilled = cv2.cvtColor(refilled, cv2.COLOR_GRAY2BGR)
         return refilled
 
-    
+    def extract_note_contours_from_clean(self, image):
+        """
+        Extracts note (symbol) contours from a staff-line-removed, binarized sheet music image.
+        Args:
+            img_nostaff (np.ndarray): Binarized image from which staff lines have been removed.
+        Returns:
+            contours (list): List of note contours found in the image.
+            binary_contour_img (np.ndarray): Image with detected contours drawn.
+        """
+        # Ensure the image is binary (if not already)
+        img_nostaff = None
+        if len(image.shape) == 3:
+            # Convert to grayscale
+            img_nostaff = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        else:
+            img_nostaff = image
+            
+        _, binary = cv2.threshold(img_nostaff, 128, 255, cv2.THRESH_BINARY_INV)
+
+        # Find external contours
+        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        # Optional: create an image for visualizing contours
+        contour_img = np.zeros_like(binary)
+        cv2.drawContours(contour_img, contours, -1, 255, thickness=2)
+        return contours, contour_img
