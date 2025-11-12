@@ -249,7 +249,7 @@ class SheetMusicPlayer:
         
         # Also create a version that detects hollow circles (whole notes)
         # Use morphological operations to find circular shapes
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
         hollow_circles = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
         
         # Find contours of potential notes (both filled and hollow)
@@ -261,9 +261,16 @@ class SheetMusicPlayer:
         
         # Create visualization image
         vis_image = image.copy()
+        viss_image = image.copy()
+        visss_image = image.copy()
         
         # Draw all contours for debugging
         cv2.drawContours(vis_image, contours, -1, (0,255,0), 1)
+        cv2.drawContours(viss_image, contours, -1, (0,255,0), 1)
+        cv2.drawContours(visss_image, contours, -1, (0,255,0), 1)
+
+        self.preview_image (viss_image,"hollow")
+        self.preview_image (viss_image,"filled")
         
         for contour in contours:
             # Get bounding rectangle
@@ -361,9 +368,9 @@ class SheetMusicPlayer:
                 print(f"Error creating directory '{image_name}': {e}")
 
             # Save original
-            cv2.imwrite(f"{image_name.split(".")[0]}_detection.png", vis_image)
+            cv2.imwrite(f"{image_name.split('.')[0]}_detection.png", vis_image)
             
-            self.logger.info(f"Preview image saved: {image_name.split(".")[0]}_detection.png")
+            self.logger.info(f"Preview image saved: {image_name.split('.')[0]}_detection.png")
 
             os.chdir("../..")
 
@@ -428,17 +435,30 @@ class SheetMusicPlayer:
         total_pixels = w * h
         fill_ratio = filled_pixels / total_pixels
         
-        # Analyze note characteristics
+        # Detect stem presence
+        vertical_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 15))
+        vertical_lines = cv2.morphologyEx(roi, cv2.MORPH_OPEN, vertical_kernel)
+        stem_pixels = np.sum(vertical_lines) / 255
+
+        # Detect flag or beam pattern
+        horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (10, 2))
+        flags = cv2.morphologyEx(roi, cv2.MORPH_OPEN, horizontal_kernel)
+        flag_pixels = np.sum(flags) / 255
+
+         # Duration heuristic
         if fill_ratio < 0.2:
-            return 'whole'  # Hollow note head
+              return 'whole'
         elif fill_ratio < 0.5:
-            return 'half'   # Partially filled
-        elif fill_ratio < 0.8:
-            return 'quarter'  # Solid note head
-        else:
-            # Check for flags/beams to determine eighth/sixteenth
-            # This is a simplified approach
+            return 'half'
+        elif stem_pixels > 50 and flag_pixels < 30:
+            return 'quarter'
+        elif flag_pixels > 50:
             return 'eighth'
+        elif flag_pixels > 100:
+            return 'sixteenth'
+        else:
+            return 'quarter'
+    
     
     def play_note(self, note_name: str, duration: float, velocity: int = 100, tempo: float = 120.0):
         """
@@ -579,7 +599,7 @@ class SheetMusicPlayer:
             # Play notes
             self.logger.info("Starting playback...")
             for i, note in enumerate(notes):
-                duration = self.note_durations[note['duration']] * beat_duration
+                duration = self.detect_note_duration(binary, (x, y, w, h))
                 self.logger.info(f"Playing {note['note']} ({note['duration']}) for {duration:.2f}s")
                 self.play_note(note_name=note['note'], duration=duration, tempo=tempo)
             
