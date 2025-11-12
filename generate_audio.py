@@ -64,7 +64,11 @@ class AudioGenerator:
         MyMIDI.addProgramChange(track, channel, time, program)
 
         for i, note in enumerate(notes):
-            MyMIDI.addNote(track, channel, note["midi_note"], time + i, self.note_durations[note["duration"]], volume)
+            duration = self.note_durations[note["duration"]]
+            # Only add notes with MIDI value > 0 (skip rests)
+            if note.get("midi_note", 0) > 0:  
+                MyMIDI.addNote(track, channel, note["midi_note"], time, duration, volume)
+            time += duration  # Add duration regardless, so silence is preserved in timing
 
         self.create_out_dir(out_dir)
         
