@@ -504,7 +504,7 @@ class SheetMusicPlayer:
                 return
 
             # Detect notes by intersection
-            notes = self.detect_notes_by_intersection(cleaned_image_image, staff_lines, save_preview, image_name)
+            notes = self.detect_notes_by_intersection(cleaned_image, staff_lines, save_preview, image_name)
 
             if not notes:
                 self.logger.error("No notes detected")
@@ -567,9 +567,9 @@ class SheetMusicPlayer:
             # Detect notes by intersection
             
             cleaned_image = self.remove_staff_lines(resized_image)
-            refilled_image = self.refill_notes(cleaned_image)
-            self.preview_image(refilled_image, "Without staff lines")
-            notes = self.detect_notes_by_intersection(refilled_image, staff_lines, save_preview, image_name)
+            #refilled_image = self.refill_notes(cleaned_image)
+            self.preview_image(cleaned_image, "Without staff lines")
+            notes = self.detect_notes_by_intersection(cleaned_image, staff_lines, save_preview, image_name)
 
             if not notes:
                 self.logger.error("No notes detected")
