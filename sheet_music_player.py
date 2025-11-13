@@ -429,18 +429,15 @@ class SheetMusicPlayer:
     def detect_rest(self, contour, image) -> Optional[str]:
         x, y, w, h = cv2.boundingRect(contour)
         roi = image[y:y+h, x:x+w]
-        if w > h and h/w < 0.4:
+        # Example stricter conditions (tune these to fit your images)
+        # Only vertical squiggles that fit quarter rest, not just any tall thin shape
+        if w > 20 and h < 10 and h/w < 0.3:
             return 'rest_whole'
-        elif 0.4 < h/w < 0.8:
+        elif w > 10 and h > 10 and h/w < 0.6:
             return 'rest_half'
-        elif 0.8 < h/w < 1.3:
-            # Typical quarter rest: Often a vertical squiggle
-            # Implement better shape check or template matching here as needed
-            return 'rest_quarter'
-        if h > 2*w:
-            # Squiggly thicker segment: could be eighth or sixteenth rest
-            # Optional: template or hierarchy for eighth/sixteenth
-            return 'rest_eighth'
+        elif w < 15 and h > 15 and abs(w-h) < 5:
+            return 'rest_quarter'  # Add template matching for squiggle if needed
+        # Possibly use cv2.matchTemplate with actual rest images for more accuracy!
         return None
     
     def play_note(self, note_name: str, duration: float, velocity: int = 100, tempo: float = 120.0):
