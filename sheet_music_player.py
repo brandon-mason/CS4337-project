@@ -71,7 +71,7 @@ class SheetMusicPlayer:
         """
         cv2.imshow(name, image)
         cv2.waitKey(0)
-        cv2.destroyAllWindows()
+        # cv2.destroyAllWindows()
         return
     
     def preprocess_image(self, image: np.ndarray, save_preview: bool = False, image_name = "image") -> np.ndarray:
@@ -101,7 +101,7 @@ class SheetMusicPlayer:
             blockSize=101,  # Increased from 35
             C=3            # Reduced from 11
         )
-        self.preview_image(thresh, 'thesh')
+
         return thresh
     
     def detect_staff_lines(self, image: np.ndarray, save_preview: bool=False, image_name: str = "image") -> List[Dict]:
@@ -195,7 +195,7 @@ class SheetMusicPlayer:
             return resized_image, new_staff_lines
 
         return original_image, staff_lines
-    
+
     def detect_notes_by_intersection(self, image: np.ndarray, staff_lines: List[Dict], save_preview: bool = False, image_name: str = "image", original_image: np.ndarray = None) -> List[Dict]:
         """
         Detect musical notes by checking intersections with staff lines.
@@ -209,96 +209,108 @@ class SheetMusicPlayer:
             List of detected notes with their properties
         """
         notes = []
-        # image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
         # Create visualization image
         vis_image = original_image.copy()
-
-        min_notehead_aspect = 0.7
-        max_notehead_aspect = 1.7
-        self.preview_image(image)
+        viss_image = image.copy()
 
         contours, _ = self.extract_note_contours_from_clean(image)
         image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        print(len(image.shape))
-        print(len(contours))
 
         cv2.drawContours(vis_image, contours, -1, (0,255,0), 1)
-
-        self.preview_image(vis_image, 'cont')
         
         for contour in contours:
-            print('contour', len(contours))
-            # Get bounding box of the contour
+            points = contour.reshape(-1, 2)
             x, y, w, h = cv2.boundingRect(contour)
-            roi = image[y:y+h, x:x+w]
+            
+            # Find widest horizontal section
+            horizontal_splits = 5
+            max_width = 0
+            notehead_y_center = y + h // 2
 
-            M = cv2.moments(contour)
-            cx = int(M['m10']/M['m00']) if M['m00'] != 0 else 0
-            cy = int(M['m01']/M['m00']) if M['m00'] != 0 else 0
-
-            rect = cv2.minAreaRect(contour)
-            box = cv2.boxPoints(rect)
-            box = np.intp(box)
-
-            # Find connected components in the bounding box
-            num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(roi)
-            # skip the background label 0
-            best_component = None
-            best_score = 0
-            for i in range(1, num_labels):
-                w_blob, h_blob = stats[i, cv2.CC_STAT_WIDTH], stats[i, cv2.CC_STAT_HEIGHT]
-                aspect = w_blob / (h_blob + 1e-5)
-                area = stats[i, cv2.CC_STAT_AREA]
-                # Prefer blobs with reasonable aspect and significant size
-                if (min_notehead_aspect < aspect < max_notehead_aspect) and area > best_score:
-                    best_score = area
-                    best_component = i
-            if best_component:
-                self.logger.info("BEST FOUND")
-                cx, cy = centroids[best_component]
-                note_name = self.map_position_to_note(y + cy, [line["y"] for line in staff_lines])
-
-                mask = np.zeros_like(image)
-                cv2.drawContours(mask, [contour], -1, 255, -1)
-                filled_ratio = np.sum(image[mask==255]) / (255 * cv2.countNonZero(mask))
-                # Use a threshold: if filled_ratio < 0.5, it's filled; otherwise, hollow
-                is_filled = filled_ratio < 0.5
+            if w < 30:
+                continue
+            
+            for i in range(horizontal_splits):
+                y_pos = y + (i * h) // horizontal_splits
+                y_next = y + ((i + 1) * h) // horizontal_splits
                 
-                # Determine note duration based on fill ratio
-                if filled_ratio > 0.6:
-                    duration = 'quarter'  # Solid note head
-                elif filled_ratio > 0.2:
-                    duration = 'half'     # Partially filled
-                else:
-                    duration = 'whole'    # Hollow note head
+                mask = (points[:, 1] >= y_pos) & (points[:, 1] < y_next)
+                slice_pts = points[mask]
+                
+                if len(slice_pts) > 0:
+                    width = slice_pts[:, 0].max() - slice_pts[:, 0].min()
 
-                if note_name:
-                    notes.append({
-                        'x': x,
-                        'y': y,
-                        'note': note_name,
-                        'duration': duration,
-                        'midi_note': self.note_mapping.get(note_name, 60),
-                        # 'staff_line': intersecting_line
-                    })
-                    
-                    # Draw detection on visualization
-                    cv2.rectangle(vis_image, (x, y), (x + w, y + h), (0, 255, 0), 2)
-                    cv2.putText(vis_image, f"{note_name} ({duration})", 
-                                (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-                    print((int(x+cx), int(y+cy)))
-                    print((int(cx), int(cy)))
-                    print((x, y))
-                    # Draw center point
-                    cv2.circle(vis_image, (int(x+cx), int(y+cy)), 3, (0, 0, 255), -1)
-                    cv2.circle(vis_image, (int(cx), int(cy)), 3, (255, 0, 255), -1)
+                    if width > max_width:
+                        max_width = width
+                        notehead_y_center = (y_pos + y_next) // 2
+            
+            # Get points near the widest region (note head)
+            y_tolerance = h // 4
+            mask = np.abs(points[:, 1] - notehead_y_center) < y_tolerance
+            head_points = points[mask]
 
-                    # cv2.circle(vis_image, box[0], 3, (0, 0, 0), -1)
-                    # cv2.circle(vis_image, box[1], 3, (0, 0, 0), -1)
-                    # cv2.circle(vis_image, box[2], 3, (0, 0, 0), -1)
-                    # cv2.circle(vis_image, box[3], 3, (0, 0, 0), -1)
+            topmost = None
+            bottommost = None
+            leftmost = tuple(contour[contour[:, :, 0].argmin()][0])
+            rightmost = tuple(contour[contour[:, :, 0].argmax()][0])
+
+            if len(head_points) > 0:
+                topmost = tuple(head_points[head_points[:, 1].argmin()])
+                bottommost = tuple(head_points[head_points[:, 1].argmax()])
+            else:
+                topmost = tuple(points[points[:, 1].argmin()])
+                bottommost = tuple(points[points[:, 1].argmax()])
+
+            top = topmost[1]
+            bottom = bottommost[1]
+            left = leftmost[0]
+            right = rightmost[0]
+
+            # cv2.circle(viss_image, topmost, 3, (255, 0, 255), -1)
+            # cv2.circle(viss_image, bottommost, 3, (255, 0, 255), -1)
+            # self.preview_image(viss_image, 'single note')
+
+            cy = top + (bottom - top) / 2
+            cx = left + (right - left) / 2
+            note_name = self.map_position_to_note(cy, [line["y"] for line in staff_lines])
+
+            
+
+            mask = np.zeros_like(image)
+            cv2.drawContours(mask, [contour], -1, 255, -1)
+
+            roi = image[top:bottom, left:right]
+            filled_ratio = np.sum(roi == 0) / ((right - left) * (bottom - top))
+            
+            # Determine note duration based on fill ratio
+            if filled_ratio > 0.7:
+                duration = 'quarter'  # Solid note head
+            elif filled_ratio > 0.2:
+                duration = 'half'     # Partially filled
+            else:
+                duration = 'whole'    # Hollow note head
+
+            if note_name:
+                notes.append({
+                    'x': cx,
+                    'y': cy,
+                    'note': note_name,
+                    'duration': duration,
+                    'midi_note': self.note_mapping.get(note_name, 60),
+                })
+                
+                # Draw detection on visualization
+                cv2.rectangle(vis_image, (x, y), (x + w, y + h), (0, 255, 0), 2)
+                cv2.putText(vis_image, f"{note_name} ({duration})", 
+                            (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+                cv2.putText(vis_image, f"Filled Ratio({filled_ratio:.1f})", 
+                            (x, y + h + 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
+                cv2.circle(vis_image, (int(cx), int(cy)), 3, (0, 0, 255), -1)
 
         self.preview_image(vis_image, f"{image_name.split(".")[0]}_detection_visualization")
+        # self.preview_image(viss_image, f"{image_name.split(".")[0]}_outer")
+
         # Sort notes by x-position (left to right)
         notes.sort(key=lambda x: x['x'])
         return notes
@@ -388,7 +400,7 @@ class SheetMusicPlayer:
             self.loader.play_note(note_name=note_name, duration=duration, volume=velocity, bpm=tempo)
             time.sleep(duration)
         except Exception as e:
-            self.logger.error(f"Error playing note {note_name}: {e}")
+            self.logger.exception(f"Error playing note {note_name}: {e}")
             
     def play_sheet_music_image(self, original_image: np.ndarray, tempo: float = 120.0, save_preview: bool = False, image_name: str = "image"):
         """
@@ -410,7 +422,7 @@ class SheetMusicPlayer:
             staff_lines = self.detect_staff_lines(original_image, self.save_preview)
 
             if not staff_lines:
-                self.logger.error("No staff lines detected")
+                self.logger.exception("No staff lines detected")
                 return
 
             # Resize image based on staff size
@@ -420,14 +432,14 @@ class SheetMusicPlayer:
             self.logger.info(f"Detected {len(resized_staff_lines)} staff lines")
 
             if len(staff_lines) != 5:
-                self.logger.error("Invalid sheet music format")
+                self.logger.exception("Invalid sheet music format")
                 return
 
             # Detect notes by intersection
             notes = self.detect_notes_by_intersection(cleaned_image_image, staff_lines, save_preview, image_name)
 
             if not notes:
-                self.logger.error("No notes detected")
+                self.logger.exception("No notes detected")
                 return
             
             self.logger.info(f"Detected {len(notes)} notes")
@@ -447,7 +459,7 @@ class SheetMusicPlayer:
             self.logger.info('All done!')
             
         except Exception as e:
-            self.logger.error(f"Error processing sheet music: {e}")
+            self.logger.exception(f"Error processing sheet music: {e}")
 
     def play_sheet_music_path(self, image_name: str, tempo: float=120.0, save_preview: bool=False):
         """
@@ -472,7 +484,7 @@ class SheetMusicPlayer:
             # Detect staff lines
             staff_lines = self.detect_staff_lines(original_image)
             if not staff_lines:
-                self.logger.error("No staff lines detected")
+                self.logger.exception("No staff lines detected")
                 return
 
             # Resize image based on staff size
@@ -481,7 +493,7 @@ class SheetMusicPlayer:
             self.logger.info(f"Detected {len(resized_staff_lines)} staff lines")
 
             if len(staff_lines) != 5:
-                self.logger.error("Invalid sheet music format")
+                self.logger.exception("Invalid sheet music format")
                 return
 
             # Detect notes by intersection
@@ -492,7 +504,7 @@ class SheetMusicPlayer:
             notes = self.detect_notes_by_intersection(refilled_image, staff_lines, save_preview, image_name, original_image=resized_image)
 
             if not notes:
-                self.logger.error("No notes detected")
+                self.logger.exception("No notes detected")
                 return
 
             self.logger.info(f"Detected {len(notes)} notes, {tempo}")
@@ -522,7 +534,7 @@ class SheetMusicPlayer:
             self.logger.info("Playback complete")
             
         except Exception as e:
-            self.logger.error(f"Error processing sheet music: {e}")
+            self.logger.exception(f"Error processing sheet music: {e}")
 
     def remove_staff_lines(self, image: np.ndarray) -> np.ndarray:
         """
