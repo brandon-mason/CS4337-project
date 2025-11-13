@@ -43,132 +43,186 @@ player = SheetMusicPlayer()
 # sheet_music_interface.launch()
 
 
+
+import base64
+
+
 def wrapper2(image, tempo, image_name, save_preview):
     save_prev = len(save_preview) > 0 and save_preview[0] == "Save"
-
-    # Run your CV + audio pipeline
     player.play_sheet_music_image(image, tempo, save_prev, image_name)
 
     audio_path = "output/output.wav"
-
-    if save_prev:
-        image_path = f"preview_directory/{image_name}/{image_name}_detection.png"
-    else:
-        image_path = None
-
-    # Return filepaths / None, NOT components
+    image_path = f"preview_directory/{image_name}/{image_name}_detection.png" if save_prev else None
     return audio_path, image_path
 
 
+# === Vintage CSS Theme ===
 custom_css = """
+@import url('https://fonts.googleapis.com/css2?family=EB+Garamond&family=Great+Vibes&display=swap');
+
+/* === Global Background === */
 body {
-  background: linear-gradient(135deg, #1b1b2f, #16213e);
-  color: #e0e0e0;
-  font-family: 'Poppins', sans-serif;
+  background-color: #f4e9d8;
+  background-image: url('https://www.transparenttextures.com/patterns/old-wall.png');
+  background-repeat: repeat;
+  color: #2f1b0c;
+  font-family: 'EB Garamond', serif;
+  overflow-x: hidden;
 }
 
+/* === Container === */
 .gradio-container {
-  max-width: 1400px !important;   /* wider overall */
-  width: 90% !important;           /* use 90% of the viewport width */
-  margin: 40px auto !important;    /* some breathing room top/bottom */
-  border-radius: 20px;
-  box-shadow: 0 0 20px rgba(255, 255, 255, 0.05);
-  background-color: rgba(255,255,255,0.03);
-  padding: 40px 60px;
+  max-width: 1000px !important;
+  width: 90% !important;
+  margin: 40px auto !important;
+  padding: 40px;
+  background: #f8f1e4;
+  border: 4px double #c2a477;
+  border-radius: 10px;
+  box-shadow: 0 0 8px rgba(0,0,0,0.1);
 }
 
-
-h1, h2, h3 {
+/* === Title Section === */
+h1 {
   text-align: center;
-  color: #fff;
-  font-weight: 600;
-  letter-spacing: 1px;
+  font-family: 'Great Vibes', cursive;
+  font-size: 3rem;
+  color: #2f1b0c;
+  text-shadow: 1px 1px #c2a477;
+  margin-bottom: 0;
+}
+p {
+  text-align: center;
+  font-style: italic;
+  color: #3c2a1a;
+  margin-top: 5px;
+  margin-bottom: 25px;
 }
 
+/* === Images === */
+img[alt="music logo"] {
+  display: block;
+  margin: 25px auto;
+  border-radius: 12px;
+  width: 300px;
+  height: auto;
+  border: 3px solid #c2a477;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.15);
+}
+
+/* === Panels === */
+.gr-box {
+  background: #f8f1e4 !important;
+  border: 2px solid #c2a477 !important;
+  border-radius: 8px !important;
+  box-shadow: inset 0 0 5px rgba(0,0,0,0.05);
+}
+
+/* === Buttons === */
 button {
-  background: linear-gradient(90deg, #6a11cb, #2575fc) !important;
-  border: none !important;
-  border-radius: 10px !important;
-  color: white !important;
-  font-weight: 600 !important;
-  padding: 10px 20px !important;
-  transition: all 0.25s ease-in-out !important;
+  background: #d6b889 !important;
+  border: 2px solid #a67544 !important;
+  color: #2f1b0c !important;
+  font-family: 'EB Garamond', serif !important;
+  font-size: 1.1rem !important;
+  padding: 10px 24px !important;
+  border-radius: 6px !important;
+  transition: all 0.2s ease-in-out !important;
 }
 button:hover {
-  transform: scale(1.05);
-  box-shadow: 0 0 15px rgba(106,17,203,0.6);
+  background: #e9d3a7 !important;
+  transform: translateY(-1px);
 }
 
-label {
-  font-weight: 600;
-  color: #a0c4ff !important;
+/* === Slider === */
+input[type="range"]::-webkit-slider-thumb {
+  background: #a67544 !important;
+}
+input[type="range"]::-webkit-slider-runnable-track {
+  background: #d6b889 !important;
 }
 
-.gr-box {
-  border-radius: 15px !important;
-  border: 1px solid rgba(255,255,255,0.1) !important;
-  background: rgba(255,255,255,0.05) !important;
+/* === Decorative Dividers === */
+hr.staff {
+  border: none;
+  border-top: 2px solid #c2a477;
+  width: 90%;
+  margin: 1.5rem auto;
+  position: relative;
+}
+hr.staff::before, hr.staff::after {
+  content: "♪";
+  font-family: 'Great Vibes', cursive;
+  color: #a67544;
+  position: absolute;
+  top: -0.7rem;
+}
+hr.staff::before { left: 5px; }
+hr.staff::after { right: 5px; }
+
+/* === Responsive === */
+@media (max-width: 900px) {
+  .gradio-container {
+    padding: 20px;
+  }
+  img[alt="music logo"] {
+    width: 200px;
+  }
+}
+img[alt="music footer"] {
+  background-color: #f8f1e4;
+  padding: 8px 0;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 0 auto;
+  border-top: 2px solid #c2a477;
+  border-bottom: 4px double #c2a477;
+  border-radius: 0 0 10px 10px;
 }
 
-/* Floating music notes */
-@keyframes floatNotes {
-  0% { transform: translateY(100vh) rotate(0deg); opacity: 0; }
-  50% { opacity: 1; }
-  100% { transform: translateY(-10vh) rotate(360deg); opacity: 0; }
-}
-.note {
-  position: fixed;
-  bottom: -50px;
-  font-size: 25px;
-  color: #c77dff;
-  animation: floatNotes 10s linear infinite;
-  z-index: -1;
-}
-.note:nth-child(2) { left: 15%; animation-duration: 12s; animation-delay: 2s; color: #9d4edd; }
-.note:nth-child(3) { left: 45%; animation-duration: 9s; animation-delay: 4s; color: #7b2cbf; }
-.note:nth-child(4) { left: 75%; animation-duration: 14s; animation-delay: 1s; color: #5a189a; }
 """
-with gr.Blocks(css=custom_css, theme=gr.themes.Glass()) as demo:
-    import base64
 
-    # Encode image as base64 (you already have this part)
+with gr.Blocks(css=custom_css) as demo:
+    # Header image
     with open("images/pic1.png", "rb") as f:
         encoded_image = base64.b64encode(f.read()).decode("utf-8")
-
     gr.HTML(f"""
     <div style='text-align:center; margin-bottom:10px;'>
-    <h1 style='margin-bottom:5px;'> Sheet Music → Audio Converter</h1>
-    <p style='color:#cfcfcf; margin-top:0;'>Upload your sheet music and play your melody </p>
-    <img src='data:image/png;base64,{encoded_image}' 
-        alt='music logo' 
-        width='360' 
-        style='display:block; margin:20px auto; border-radius:20px; box-shadow:0 0 20px rgba(106,17,203,0.5);'>
+      <h1>Sheet Music Audio Converter</h1>
+      <p>Bring your notes to life, the old-fashioned way.</p>
+      <img src='data:image/png;base64,{encoded_image}' alt='music logo'>
     </div>
-
-    <div class="note">♪</div>
-    <div class="note">♫</div>
-    <div class="note">♬</div>
-    <div class="note">♩</div>
+    <hr class="staff">
     """)
 
-
-    image = gr.Image(label="Input")
-    # output_image = 
-    tempo = gr.Slider(minimum=60, maximum=200, value=120.0, randomize=False, label="Tempo")
-    name = gr.Textbox(
-            label="Image Name",
-            value="image",
-        )
-    save = gr.CheckboxGroup(["Save"], label = "Save Previews:")
+    # Inputs and outputs
+    image = gr.Image(label="Upload Sheet Music")
+    tempo = gr.Slider(minimum=60, maximum=200, value=120.0, label="Tempo")
+    name = gr.Textbox(label="Image Name", value="image")
+    save = gr.CheckboxGroup(["Save"], label="Save Previews:")
     output_audio = gr.Audio(label="Generated Audio", streaming=True, type='filepath')
-    output_image = gr.Image()
+    output_image = gr.Image(label="Detected Notes Preview")
 
-    submit_btn = gr.Button("Submit")
+    submit_btn = gr.Button("Generate Audio")
 
     submit_btn.click(
         fn=wrapper2, 
         inputs=[image, tempo, name, save], 
-        outputs=[output_audio, output_image])
-    
-#demo.serve_static_file("images/pic1.png")
+        outputs=[output_audio, output_image]
+    )
+
+    with open("images/pic4.png", "rb") as f:
+        encoded_image2 = base64.b64encode(f.read()).decode("utf-8")
+    gr.HTML(f"""
+    <hr class="staff">
+    <img src='data:image/png;base64,{encoded_image2}' 
+         alt='music footer' 
+         style='width: 100%; max-width: 100%; height: auto; display: block; 
+                margin: 0 auto; border: 3px double #c2a477; 
+                border-radius: 0 0 10px 10px; box-shadow: 0 -2px 5px rgba(0,0,0,0.1);'>
+    """)
+
+
 demo.launch()
