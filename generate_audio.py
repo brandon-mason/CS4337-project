@@ -62,9 +62,10 @@ class AudioGenerator:
                             # automatically)
         MyMIDI.addTempo(track, time, tempo)
         MyMIDI.addProgramChange(track, channel, time, program)
-
+        print(notes)
         for i, note in enumerate(notes):
-            MyMIDI.addNote(track, channel, note["midi_note"], time + i, self.note_durations[note["duration"]], volume)
+            MyMIDI.addNote(track, channel, note["midi_note"], time, self.note_durations[note["duration"]], volume)
+            time += self.note_durations[note["duration"]]
 
         self.create_out_dir(out_dir)
         

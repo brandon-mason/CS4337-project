@@ -52,7 +52,7 @@ def wrapper2(image, tempo, image_name, save_preview):
     player.play_sheet_music_image(image, tempo, save_prev, image_name)
 
     audio_path = "output/output.wav"
-    image_path = f"preview_directory/{image_name}/{image_name}_detection.png" if save_prev else None
+    image_path = f"preview_directory/{image_name}_preview.png" if save_prev else None
     return audio_path, image_path
 
 

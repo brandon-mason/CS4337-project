@@ -69,8 +69,8 @@ class SheetMusicPlayer:
         Returns:
             Preprocessed image as numpy array
         """
-        cv2.imshow(name, image)
-        cv2.waitKey(0)
+        # cv2.imshow(name, image)
+        # cv2.waitKey(0)
         # cv2.destroyAllWindows()
         return
     
@@ -300,6 +300,7 @@ class SheetMusicPlayer:
                     'midi_note': self.note_mapping.get(note_name, 60),
                 })
                 
+                
                 # Draw detection on visualization
                 cv2.rectangle(vis_image, (x, y), (x + w, y + h), (0, 255, 0), 2)
                 cv2.putText(vis_image, f"{note_name} ({duration})", 
@@ -309,6 +310,8 @@ class SheetMusicPlayer:
                 cv2.circle(vis_image, (int(cx), int(cy)), 3, (0, 0, 255), -1)
 
         self.preview_image(vis_image, f"{image_name.split(".")[0]}_detection_visualization")
+        if save_preview:
+            cv2.imwrite(f"preview_directory/{image_name.split(".")[0]}_preview.png", vis_image)
         # self.preview_image(viss_image, f"{image_name.split(".")[0]}_outer")
 
         # Sort notes by x-position (left to right)
@@ -412,22 +415,19 @@ class SheetMusicPlayer:
             save_preview: Whether to save preview images of processing steps
         """
         try:
-            self.save_preview = save_preview
-            self.logger.info(f"Processing sheet music: ")
-            
             # Initialize AudioGenerator
             generator = AudioGenerator(self.soundfont_path, self.note_mapping, self.note_durations)
             
+            self.logger.info(f"Processing sheet music: ")
+            
             # Detect staff lines
-            staff_lines = self.detect_staff_lines(original_image, self.save_preview)
-
+            staff_lines = self.detect_staff_lines(original_image)
             if not staff_lines:
                 self.logger.exception("No staff lines detected")
                 return
 
             # Resize image based on staff size
             resized_image, resized_staff_lines = self.resize_by_staff_height(original_image, staff_lines)
-            cleaned_image = self.remove_staff_lines(resized_image)
             
             self.logger.info(f"Detected {len(resized_staff_lines)} staff lines")
 
@@ -435,8 +435,11 @@ class SheetMusicPlayer:
                 self.logger.exception("Invalid sheet music format")
                 return
 
+            cleaned_image = self.remove_staff_lines(resized_image)
+            refilled_image = self.refill_notes(cleaned_image)
+            self.preview_image(refilled_image, "Without staff lines")
             # Detect notes by intersection
-            notes = self.detect_notes_by_intersection(cleaned_image, staff_lines, save_preview, image_name)
+            notes = self.detect_notes_by_intersection(refilled_image, staff_lines, save_preview, image_name, original_image=resized_image)
 
             if not notes:
                 self.logger.exception("No notes detected")
@@ -496,11 +499,10 @@ class SheetMusicPlayer:
                 self.logger.exception("Invalid sheet music format")
                 return
 
-            # Detect notes by intersection
-            
             cleaned_image = self.remove_staff_lines(resized_image)
             refilled_image = self.refill_notes(cleaned_image)
             self.preview_image(refilled_image, "Without staff lines")
+            # Detect notes by intersection
             notes = self.detect_notes_by_intersection(refilled_image, staff_lines, save_preview, image_name, original_image=resized_image)
 
             if not notes:
