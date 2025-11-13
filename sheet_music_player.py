@@ -32,13 +32,17 @@ class SheetMusicPlayer:
             'half': 2.0,
             'quarter': 1.0,
             'eighth': 0.5,
-            'sixteenth': 0.25
+            'sixteenth': 0.25,
+            'rest_whole': 4.0,
+            'rest_half': 2.0,
+            'rest_quarter': 1.0,
+            'rest_eighth': 0.5,
+            'rest_sixteenth': 0.25
         }
         self.save_preview = False
 
         # Initialize soundfont loader
         self.loader = sf.sf2_loader(self.soundfont_path)
-        self.loader < 5
         
         # MIDI note mapping for treble clef (C4 to C6)
         self.note_mapping = {
@@ -196,103 +200,174 @@ class SheetMusicPlayer:
 
         return original_image, staff_lines
 
-    def detect_notes_by_intersection(self, image: np.ndarray, staff_lines: List[Dict],save_preview: bool = False, image_name: str = "image",original_image: np.ndarray = None) -> List[Dict]:
+    def detect_notes_by_intersection(self, image: np.ndarray, staff_lines: List[Dict], save_preview: bool = False, image_name: str = "image", original_image: np.ndarray = None) -> List[Dict]:
         """
-        Detect musical notes and rests with durations (whole, half, quarter, eighth, sixteenth).
+        Detect musical notes by checking intersections with staff lines.
+        
+        Args:
+            image: Sheet music image
+            staff_lines: List of staff line dictionaries
+            save_preview: Whether to save the visualization detection image
+            
+        Returns:
+            List of detected notes with their properties
         """
         notes = []
 
-        if original_image is None:
-            original_image = image.copy()
+        # Create visualization image
         vis_image = original_image.copy()
+        viss_image = image.copy()
 
-        # --- Extract contours ---
         contours, _ = self.extract_note_contours_from_clean(image)
-        image_gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape)==3 else image
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-        # --- Load rest templates ---
-        rest_templates = {
-            'whole': cv2.imread('templates/whole_rest.png', 0),
-            'half': cv2.imread('templates/half_rest.png', 0),
-            'quarter': cv2.imread('templates/quarter_rest.png', 0),
-            'eighth': cv2.imread('templates/eighth_rest.png', 0),
-            'sixteenth': cv2.imread('templates/sixteenth_rest.png', 0)
-        }
-
+        cv2.drawContours(vis_image, contours, -1, (0,255,0), 1)
+        
         for contour in contours:
+            points = contour.reshape(-1, 2)
             x, y, w, h = cv2.boundingRect(contour)
-            cx, cy = x + w//2, y + h//2
-            roi = image_gray[y:y+h, x:x+w]
+            
+            # Find widest horizontal section
+            horizontal_splits = 5
+            max_width = 0
+            notehead_y_center = y + h // 2
 
-            # --- Check for rests first ---
-            detected_rest = False
-            for rest_type, template in rest_templates.items():
-                if template is None:
-                    continue
-                res = cv2.matchTemplate(roi, template, cv2.TM_CCOEFF_NORMED)
-                if np.max(res) > 0.7:
-                    notes.append({
-                        'x': cx, 'y': cy, 'note': 'rest', 'duration': rest_type, 'midi_note': 0
-                    })
-                    cv2.rectangle(vis_image, (x, y), (x+w, y+h), (0,0,255), 2)
-                    cv2.putText(vis_image, f"Rest ({rest_type})", (x, y-5),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,0,255), 1)
-                    detected_rest = True
-                    break
-            if detected_rest:
+            if w < 30:
+                continue
+            
+            for i in range(horizontal_splits):
+                y_pos = y + (i * h) // horizontal_splits
+                y_next = y + ((i + 1) * h) // horizontal_splits
+                
+                mask = (points[:, 1] >= y_pos) & (points[:, 1] < y_next)
+                slice_pts = points[mask]
+                
+                if len(slice_pts) > 0:
+                    width = slice_pts[:, 0].max() - slice_pts[:, 0].min()
+
+                    if width > max_width:
+                        max_width = width
+                        notehead_y_center = (y_pos + y_next) // 2
+            
+            # Get points near the widest region (note head)
+            y_tolerance = h // 4
+            mask = np.abs(points[:, 1] - notehead_y_center) < y_tolerance
+            head_points = points[mask]
+
+            topmost = None
+            bottommost = None
+            leftmost = tuple(contour[contour[:, :, 0].argmin()][0])
+            rightmost = tuple(contour[contour[:, :, 0].argmax()][0])
+
+            if len(head_points) > 0:
+                topmost = tuple(head_points[head_points[:, 1].argmin()])
+                bottommost = tuple(head_points[head_points[:, 1].argmax()])
+            else:
+                topmost = tuple(points[points[:, 1].argmin()])
+                bottommost = tuple(points[points[:, 1].argmax()])
+
+            top = topmost[1]
+            bottom = bottommost[1]
+            left = leftmost[0]
+            right = rightmost[0]
+
+            # cv2.circle(viss_image, topmost, 3, (255, 0, 255), -1)
+            # cv2.circle(viss_image, bottommost, 3, (255, 0, 255), -1)
+            # self.preview_image(viss_image, 'single note')
+
+            cy = top + (bottom - top) / 2
+            cx = left + (right - left) / 2
+            note_name = self.map_position_to_note(cy, [line["y"] for line in staff_lines])
+
+            
+
+            mask = np.zeros_like(image)
+            cv2.drawContours(mask, [contour], -1, 255, -1)
+
+            roi = image[top:bottom, left:right]
+            filled_ratio = np.sum(roi == 0) / ((right - left) * (bottom - top))
+            # Check if this contour is a rest
+            rest_type = self.detect_rest(contour, image)
+            if rest_type:
+                notes.append({
+                    'x': cx,
+                    'y': cy,
+                    'note': rest_type,
+                    'duration': rest_type,
+                    'midi_note': 0  # No MIDI for rests
+                })
                 continue
 
-            # --- Detect note head fill ratio ---
-            filled_ratio = np.sum(roi == 0) / (w * h)
-
-            # --- Detect stem/flags for eighth/sixteenth ---
-            stem_roi = image_gray[max(0, y-2*h):y+h, x:x+w]
-            edges = cv2.Canny(stem_roi, 50, 150)
-            lines = cv2.HoughLinesP(edges, 1, np.pi/180, threshold=10, minLineLength=5, maxLineGap=2)
-            flag_count = self.count_flags(lines) if lines is not None else 0
-
-            # --- Determine duration ---
-            if filled_ratio < 0.2:
-                duration = 'whole'
-            elif filled_ratio < 0.5:
-                duration = 'half'
-            elif flag_count == 0:
-                duration = 'quarter'
-            elif flag_count == 1:
-                duration = 'eighth'
-            else:
-                duration = 'sixteenth'
-
-            # --- Map position to note name ---
+            # For normal notes, determine duration including flags
+            duration = self.detect_note_flags(contour, image)
             note_name = self.map_position_to_note(cy, [line["y"] for line in staff_lines])
-            midi_note = self.note_mapping.get(note_name, 60) if note_name else 60
 
-            notes.append({
-                'x': cx, 'y': cy, 'note': note_name, 'duration': duration, 'midi_note': midi_note
-            })
+            # Determine note duration based on fill ratio
+            if filled_ratio > 0.7:
+                duration = 'quarter'  # Solid note head
+            elif filled_ratio > 0.2:
+                duration = 'half'     # Partially filled
+            else:
+                duration = 'whole'    # Hollow note head
 
-            # --- Visualization ---
-            cv2.rectangle(vis_image, (x, y), (x+w, y+h), (0, 255, 0), 2)
-            label = f"{note_name} ({duration})" if note_name else f"Note ({duration})"
-            v2.putText(vis_image, label, (x, y-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-            cv2.circle(vis_image, (cx, cy), 3, (0, 0, 255), -1)
+            if note_name:
+                notes.append({
+                    'x': cx,
+                    'y': cy,
+                    'note': note_name,
+                    'duration': 'quarter',
+                    'midi_note': self.note_mapping.get(note_name, 60),
+                })
+                
+                # Draw detection on visualization
+                cv2.rectangle(vis_image, (x, y), (x + w, y + h), (0, 255, 0), 2)
+                cv2.putText(vis_image, f"{note_name} ({duration})", 
+                            (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+                cv2.putText(vis_image, f"Filled Ratio({filled_ratio:.1f})", 
+                            (x, y + h + 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
+                cv2.circle(vis_image, (int(cx), int(cy)), 3, (0, 0, 255), -1)
 
-        # Sort notes left to right
+        self.preview_image(vis_image, f"{image_name.split(".")[0]}_detection_visualization")
+        # self.preview_image(viss_image, f"{image_name.split(".")[0]}_outer")
+       
+        # Sort notes by x-position (left to right)
         notes.sort(key=lambda x: x['x'])
-
-        if save_preview:
-            self.preview_image(vis_image, f"{image_name.split('.')[0]}_detection_visualization")
-
         return notes
+        
+    def map_position_to_note(self, y_pos: int, staff_lines: List[int]) -> Optional[str]:
+        """
+        Map a y-position to a musical note based on staff lines.
+        
+        Args:
+            y_pos: Y-coordinate of the note
+            staff_lines: List of staff line y-coordinates
+            
+        Returns:
+            Note name (e.g., 'C4', 'D4') or None if not found
+        """
+        if len(staff_lines) < 5:
+            return None
+        
+        # Calculate staff spacing
+        staff_spacing = (staff_lines[-1] - staff_lines[0]) / 4
+        
+        # Calculate position relative to staff
+        relative_pos = (y_pos - staff_lines[0]) / staff_spacing
+        
+        # Map to note names (simplified mapping)
+        note_positions = {
+            -2: 'C6', -1.5: 'B5', -1: 'A5', -0.5: 'G5', 0: 'F5',
+            0.5: 'E5', 1: 'D5', 1.5: 'C5', 2: 'B4', 2.5: 'A4',
+            3: 'G4', 3.5: 'F4', 4: 'E4', 4.5: 'D4', 5: 'C4'
+        }
 
-    def count_flags(self, lines):
-        """Counts diagonal lines (flags) to distinguish eighth/sixteenth notes."""
-        flag_lines = 0
-        for x1, y1, x2, y2 in lines[:,0]:
-            angle = np.arctan2(y2 - y1, x2 - x1) * 180 / np.pi
-            if 20 < abs(angle) < 70:  # Rough estimate for flags
-                flag_lines += 1
-            return flag_lines
+        # Find closest position
+        closest_pos = min(note_positions.keys(), key=lambda x: abs(x - relative_pos))
+        
+        if abs(closest_pos - relative_pos) < 0.5:  # Tolerance
+            return note_positions[closest_pos]
+        
+        return None
     
     def detect_note_duration(self, image: np.ndarray, note_region: Tuple[int, int, int, int]) -> str:
         """
@@ -324,8 +399,31 @@ class SheetMusicPlayer:
             # Check for flags/beams to determine eighth/sixteenth
             # This is a simplified approach
             return 'eighth'
-    
 
+    
+    def detect_note_flags(self, contour, image) -> str:
+        """
+        Detect note duration based on presence of flags (eighth, sixteenth).
+        Returns: 'quarter', 'eighth', or 'sixteenth'
+        """
+        x, y, w, h = cv2.boundingRect(contour)
+        roi = image[y:y+h, x:x+w]
+
+        # Vertical kernel to find stems
+        vertical_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, h//2))
+        stems = cv2.morphologyEx(roi, cv2.MORPH_OPEN, vertical_kernel)
+
+        contours_flags, _ = cv2.findContours(stems, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        if len(contours_flags) == 0:
+            return 'quarter'
+        elif len(contours_flags) == 1:
+            return 'eighth'
+        else:
+            return 'sixteenth'
+        
+    def detect_rest(self, contour, image) -> Optional[str]:
+        return None
     
     def play_note(self, note_name: str, duration: float, velocity: int = 100, tempo: float = 120.0):
         """
@@ -380,7 +478,7 @@ class SheetMusicPlayer:
                 return
 
             # Detect notes by intersection
-            notes = self.detect_notes_by_intersection(cleaned_image_image, staff_lines, save_preview, image_name)
+            notes = self.detect_notes_by_intersection(cleaned_image, staff_lines, save_preview, image_name)
 
             if not notes:
                 self.logger.exception("No notes detected")
@@ -472,9 +570,12 @@ class SheetMusicPlayer:
             self.logger.info("Starting playback...")
             for i, note in enumerate(notes):
                 duration = self.note_durations[note['duration']] * beat_duration
-                self.logger.info(f"Playing {note['note']} ({note['duration']}) for {duration:.2f}s")
-                self.play_note(note_name=note['note'], duration=duration, tempo=tempo)
-            
+                if 'rest' in note['note']:
+                    self.logger.info(f"Rest for {duration:.2f}s")
+                    time.sleep(duration)  # silence
+                else:
+                    self.logger.info(f"Playing {note['note']} ({note['duration']}) for {duration:.2f}s")
+                    self.play_note(note_name=note['midi_note'], duration=duration, tempo=tempo)
             self.logger.info("Playback complete")
             
         except Exception as e:
