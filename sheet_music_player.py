@@ -414,15 +414,33 @@ class SheetMusicPlayer:
         stems = cv2.morphologyEx(roi, cv2.MORPH_OPEN, vertical_kernel)
 
         contours_flags, _ = cv2.findContours(stems, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
         if len(contours_flags) == 0:
             return 'quarter'
-        elif len(contours_flags) == 1:
+         # Now: check for flags to the right/below stem base
+        flag_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (w//3, 3))
+        flags = cv2.morphologyEx(roi, cv2.MORPH_OPEN, flag_kernel)
+        flag_cnts, _ = cv2.findContours(flags, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if len(flag_cnts) == 1:
             return 'eighth'
-        else:
+        elif len(flag_cnts) >= 2:
             return 'sixteenth'
+        return None
         
     def detect_rest(self, contour, image) -> Optional[str]:
+        x, y, w, h = cv2.boundingRect(contour)
+        roi = image[y:y+h, x:x+w]
+        if w > h and h/w < 0.4:
+            return 'rest_whole'
+        elif 0.4 < h/w < 0.8:
+            return 'rest_half'
+        elif 0.8 < h/w < 1.3:
+            # Typical quarter rest: Often a vertical squiggle
+            # Implement better shape check or template matching here as needed
+            return 'rest_quarter'
+        if h > 2*w:
+            # Squiggly thicker segment: could be eighth or sixteenth rest
+            # Optional: template or hierarchy for eighth/sixteenth
+            return 'rest_eighth'
         return None
     
     def play_note(self, note_name: str, duration: float, velocity: int = 100, tempo: float = 120.0):
@@ -575,7 +593,7 @@ class SheetMusicPlayer:
                     time.sleep(duration)  # silence
                 else:
                     self.logger.info(f"Playing {note['note']} ({note['duration']}) for {duration:.2f}s")
-                    self.play_note(note_name=note['midi_note'], duration=duration, tempo=tempo)
+                    self.play_note(note_name=note['note'], duration=duration, tempo=tempo)
             self.logger.info("Playback complete")
             
         except Exception as e:
