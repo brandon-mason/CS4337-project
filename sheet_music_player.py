@@ -227,13 +227,30 @@ class SheetMusicPlayer:
             points = contour.reshape(-1, 2)
             x, y, w, h = cv2.boundingRect(contour)
             
+            if w < 10 or h < 10:
+                continue
+            # Calculate the center for this contour (for both notes and rests)
+            cx = x + w / 2
+            cy = y + h / 2   
+
+            roi = image[y:y+h, x:x+w]
+
+            # Check if this contour is a rest
+            rest_type = self.detect_rest(contour, image)
+            if rest_type:
+                notes.append({
+                    'x': cx,
+                    'y': cy,
+                    'note': rest_type,
+                    'duration': rest_type,
+                    'midi_note': 0  # No MIDI for rests
+                })
+                continue
+            
             # Find widest horizontal section
             horizontal_splits = 5
             max_width = 0
             notehead_y_center = y + h // 2
-
-            if w < 30:
-                continue
             
             for i in range(horizontal_splits):
                 y_pos = y + (i * h) // horizontal_splits
@@ -271,9 +288,6 @@ class SheetMusicPlayer:
             left = leftmost[0]
             right = rightmost[0]
 
-            # cv2.circle(viss_image, topmost, 3, (255, 0, 255), -1)
-            # cv2.circle(viss_image, bottommost, 3, (255, 0, 255), -1)
-            # self.preview_image(viss_image, 'single note')
 
             cy = top + (bottom - top) / 2
             cx = left + (right - left) / 2
@@ -286,36 +300,33 @@ class SheetMusicPlayer:
 
             roi = image[top:bottom, left:right]
             filled_ratio = np.sum(roi == 0) / ((right - left) * (bottom - top))
-            # Check if this contour is a rest
-            rest_type = self.detect_rest(contour, image)
-            if rest_type:
-                notes.append({
-                    'x': cx,
-                    'y': cy,
-                    'note': rest_type,
-                    'duration': rest_type,
-                    'midi_note': 0  # No MIDI for rests
-                })
-                continue
-
-            # For normal notes, determine duration including flags
-            duration = self.detect_note_flags(contour, image)
-            note_name = self.map_position_to_note(cy, [line["y"] for line in staff_lines])
-
-            # Determine note duration based on fill ratio
-            if filled_ratio > 0.7:
-                duration = 'quarter'  # Solid note head
-            elif filled_ratio > 0.2:
-                duration = 'half'     # Partially filled
+            # For notes
+            duration = None
+            #1. Flag-based duration for 8th/16th (returns None for no flags)
+            duration_flag, flag_count = self.detect_note_flags(contour, image)
+            if (bottom - top) <= 0 or (right - left) <= 0:
+                continue  # skip malformed contours
+            if duration_flag and filled_ratio > 0.37:
+                duration = duration_flag
             else:
-                duration = 'whole'    # Hollow note head
+            # Determine note duration based on fill ratio
+                if filled_ratio > 0.45:
+                    duration = 'quarter'  # Solid note head
+                elif filled_ratio > 0.25:
+                    duration = 'half'     # Partially filled
+                else:
+                    duration = 'whole'    # Hollow note head
+            print(f"x={cx}, y={cy}, filled_ratio={filled_ratio:.2f}, flag_cnts={flag_count}, assigned:{duration}")
+            
 
+            note_name = self.map_position_to_note(cy, [line["y"] for line in staff_lines])
+            
             if note_name:
                 notes.append({
                     'x': cx,
                     'y': cy,
                     'note': note_name,
-                    'duration': 'quarter',
+                    'duration': duration,
                     'midi_note': self.note_mapping.get(note_name, 60),
                 })
                 
@@ -329,9 +340,11 @@ class SheetMusicPlayer:
 
         self.preview_image(vis_image, f"{image_name.split(".")[0]}_detection_visualization")
         # self.preview_image(viss_image, f"{image_name.split(".")[0]}_outer")
-       
+        
+
         # Sort notes by x-position (left to right)
         notes.sort(key=lambda x: x['x'])
+
         return notes
         
     def map_position_to_note(self, y_pos: int, staff_lines: List[int]) -> Optional[str]:
@@ -391,9 +404,9 @@ class SheetMusicPlayer:
         # Analyze note characteristics
         if fill_ratio < 0.2:
             return 'whole'  # Hollow note head
-        elif fill_ratio < 0.5:
+        elif fill_ratio < 0.4:
             return 'half'   # Partially filled
-        elif fill_ratio < 0.8:
+        elif fill_ratio < 0.6:
             return 'quarter'  # Solid note head
         else:
             # Check for flags/beams to determine eighth/sixteenth
@@ -401,43 +414,98 @@ class SheetMusicPlayer:
             return 'eighth'
 
     
-    def detect_note_flags(self, contour, image) -> str:
+    def detect_note_flags(self, contour, image) -> Tuple[Optional[str], int]:
         """
         Detect note duration based on presence of flags (eighth, sixteenth).
         Returns: 'quarter', 'eighth', or 'sixteenth'
         """
         x, y, w, h = cv2.boundingRect(contour)
         roi = image[y:y+h, x:x+w]
-
-        # Vertical kernel to find stems
-        vertical_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, h//2))
-        stems = cv2.morphologyEx(roi, cv2.MORPH_OPEN, vertical_kernel)
-
-        contours_flags, _ = cv2.findContours(stems, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if len(contours_flags) == 0:
-            return 'quarter'
-         # Now: check for flags to the right/below stem base
-        flag_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (w//3, 3))
-        flags = cv2.morphologyEx(roi, cv2.MORPH_OPEN, flag_kernel)
-        flag_cnts, _ = cv2.findContours(flags, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if len(flag_cnts) == 1:
-            return 'eighth'
-        elif len(flag_cnts) >= 2:
-            return 'sixteenth'
-        return None
         
+        # Only look for stems
+        vertical_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(2, h//3)))
+        stem_img = cv2.morphologyEx(roi, cv2.MORPH_OPEN, vertical_kernel)
+        stem_cnts, _ = cv2.findContours(stem_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        # If not stem found
+        if len(stem_cnts) == 0:
+            return None, 0
+
+        # Estimate stem orientation
+        stem_pixels = np.column_stack(np.where(stem_img > 0))
+        stem_y_mean = np.mean(stem_pixels[:, 0]) if stem_pixels.size > 0 else h //2
+        head_center_y = h // 2
+
+        #If stem tip is above notehead, look for lfag at top else at bottom
+        if stem_y_mean < head_center_y:
+            flag_region = roi[:int(h * 0.20),:]
+        else:
+            flag_region = roi[int(h * 0.80):,:]
+        
+         # Now: check for flags to the right/below stem base
+        flag_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (max(2, w//18), 3))
+
+        flag_img = cv2.morphologyEx(flag_region, cv2.MORPH_OPEN, flag_kernel)
+        flag_cnts, _ = cv2.findContours(flag_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        #Filter by area
+        min_flag_area = 12 #may need to adjust
+        min_flag_width = max(4, w // 10)
+        flag_region_height = flag_region.shape[0]
+        max_flag_width_fraction = 0.6
+        
+        flag_cnts_filtered = []    
+        for cnt  in flag_cnts:
+            x2,y2,w2,h2 = cv2.boundingRect(cnt)
+            if (
+                cv2.contourArea(cnt) > min_flag_area and w2 > min_flag_width and w2 < max_flag_width_fraction * w
+            ):
+                if abs(y2) < 4 or abs((y2 + h2) - flag_region_height) < 4:
+                    flag_cnts_filtered.append(cnt)
+        
+        print(f"x={x}, y={y}, w={w}, h={h}, flag_cnts={len(flag_cnts_filtered)}")
+        flag_cnts = flag_cnts_filtered
+        
+        flag_count = len(flag_cnts)
+        if len(flag_cnts) == 1:
+            return 'eighth', flag_count
+        elif len(flag_cnts) >= 2:
+            return 'sixteenth', flag_count
+        return None, flag_count
+        
+    
     def detect_rest(self, contour, image) -> Optional[str]:
         x, y, w, h = cv2.boundingRect(contour)
         roi = image[y:y+h, x:x+w]
-        # Example stricter conditions (tune these to fit your images)
-        # Only vertical squiggles that fit quarter rest, not just any tall thin shape
-        if w > 20 and h < 10 and h/w < 0.3:
-            return 'rest_whole'
-        elif w > 10 and h > 10 and h/w < 0.6:
-            return 'rest_half'
-        elif w < 15 and h > 15 and abs(w-h) < 5:
-            return 'rest_quarter'  # Add template matching for squiggle if needed
-        # Possibly use cv2.matchTemplate with actual rest images for more accuracy!
+        # Guarantee ROI is grayscale
+        if len(roi.shape) == 3:
+            roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        roi = roi.astype(np.uint8)
+        quarter_template = cv2.imread('rest_templates/quarter_rest.png', 0)
+        half_template = cv2.imread('rest_templates/half_rest.png', 0)
+        whole_template = cv2.imread('rest_templates/whole_rest.png', 0)
+        eigth_template = cv2.imread('rest_templates/eighth_rest.png', 0)
+        sixteenth_template = cv2.imread('rest_templates/sixteenth_rest.png', 0)
+        if quarter_template is None:
+            return None
+        # If ROI is too small or too large, skip to avoid false matches
+        if roi.shape[0] < 10 or roi.shape[1] < 10:
+            return None
+     
+        # Resize roi to match template size (or template to roi size)
+        # For robustness, handle both cases
+        try:
+            resized_template = cv2.resize(quarter_template, (roi.shape[1], roi.shape[0]))
+            cv2.imwrite("rest_roi_debug.png", roi)
+            cv2.imwrite("rest_template_debug.png", resized_template)
+        except Exception as e:
+            print(f"Template resize error: {e}")
+            return None
+        rest = cv2.matchTemplate(roi, resized_template, cv2.TM_CCOEFF_NORMED)
+        min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(rest)
+        if max_val > 0.3:  # You may tune this threshold
+            return "rest_quarter"
+        print(f"Rest ROI shape: {roi.shape}, max_val: {max_val}")
         return None
     
     def play_note(self, note_name: str, duration: float, velocity: int = 100, tempo: float = 120.0):
@@ -500,6 +568,11 @@ class SheetMusicPlayer:
                 return
             
             self.logger.info(f"Detected {len(notes)} notes")
+
+            notes = [n for n in notes if 'duration' in n]
+            for n in notes:
+                if 'duration' not in n:
+                    print(f"WARNING: Skipping note missing duration: {n}")
 
             # Generate MIDI file from note data
             out_dir = "output"
@@ -568,11 +641,14 @@ class SheetMusicPlayer:
 
             # Calculate beat duration
             beat_duration = 60.0 / tempo
+            for note in notes:
+                if "duration" not in note:
+                    print(f"ERROR: Note missing duration: {note}")
 
             # Generate MIDI file from note data
             out_dir = "output"
             self.logger.info('Generating MIDI...')
-            generator.generate_midi(notes=notes, tempo=tempo, out_dir=out_dir)
+            generator.generate_midi(notes = notes, tempo = tempo, out_dir = out_dir)
             self.logger.info('MIDI Generated!')
 
             # Generate audio file from MIDI file
@@ -584,7 +660,8 @@ class SheetMusicPlayer:
             # Play notes
             self.logger.info("Starting playback...")
             for i, note in enumerate(notes):
-                duration = self.note_durations[note['duration']] * beat_duration
+                key = note['duration'] if note['duration'] in self.note_durations else 'quarter'
+                duration = self.note_durations[key] * beat_duration
                 if 'rest' in note['note']:
                     self.logger.info(f"Rest for {duration:.2f}s")
                     time.sleep(duration)  # silence
