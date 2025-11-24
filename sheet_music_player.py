@@ -41,6 +41,8 @@ class SheetMusicPlayer:
         }
         self.save_preview = False
 
+        self.img = None
+
         # Initialize soundfont loader
         self.loader = sf.sf2_loader(self.soundfont_path)
         
@@ -73,6 +75,16 @@ class SheetMusicPlayer:
         Returns:
             Preprocessed image as numpy array
         """
+
+        # bordered = cv2.copyMakeBorder(
+        #         image, 
+        #         30, 
+        #         30, 
+        #         30, 
+        #         30, 
+        #         cv2.BORDER_CONSTANT, 
+        #         value=(255)
+        #         )
         cv2.imshow(name, image)
         cv2.waitKey(0)
         # cv2.destroyAllWindows()
@@ -199,6 +211,28 @@ class SheetMusicPlayer:
             return resized_image, new_staff_lines
 
         return original_image, staff_lines
+    
+    def are_adjacent(self, contours, image):
+        imagee = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+        adjacent = []
+        adjacent_indices = []
+        for i, c1 in enumerate(contours):
+            x1, y1, w1, h1 = cv2.boundingRect(c1)
+            for j, c2 in enumerate(contours):
+                if i == j:
+                    continue
+                x2, y2, w2, h2 = cv2.boundingRect(c2)
+                # print(x1 , x1 , w1)
+                # print(x2 , x2 , w2)
+                if x2 - x1 == w1:
+                    merged_points = np.vstack([c1, c2])
+                    hull = cv2.convexHull(merged_points)
+                    adjacent.append(hull)
+                    adjacent_indices.append((i, j))
+                    # print('made it?')
+                    # cv2.drawContours(imagee, hull, -1, (0,255,0), 4)
+                    # self.preview_image(imagee, "please")
+        return adjacent, adjacent_indices
 
     def detect_notes_by_intersection(self, image: np.ndarray, staff_lines: List[Dict], save_preview: bool = False, image_name: str = "image", original_image: np.ndarray = None) -> List[Dict]:
         """
@@ -212,17 +246,406 @@ class SheetMusicPlayer:
         Returns:
             List of detected notes with their properties
         """
+        border_amt = 50
         notes = []
+        split_contours = []
 
         # Create visualization image
-        vis_image = original_image.copy()
-        viss_image = image.copy()
-
+        vis_image0 = cv2.copyMakeBorder(
+            original_image, 
+            border_amt, 
+            border_amt, 
+            border_amt, 
+            border_amt, 
+            cv2.BORDER_CONSTANT, 
+            value=(255,255,255)
+        )
+        # self.preview_image(image, 'intersection')
         contours, _ = self.extract_note_contours_from_clean(image)
         image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        original_image = cv2.cvtColor(original_image, cv2.COLOR_BGR2GRAY)
+        vis_image = vis_image0.copy()
+        # cv2.drawContours(vis_image, contours, -1, (0,255,0), 1)
 
-        cv2.drawContours(vis_image, contours, -1, (0,255,0), 1)
         
+                    
+        vis_image1 = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+        
+        self.preview_image(vis_image1,'vis')
+        count = -1
+        for contour in contours:
+            count += 1
+            points = contour.reshape(-1, 2)
+            x, y, w, h = cv2.boundingRect(contour)
+
+            # border_amt = 50
+            # new_x = x
+            # new_y = y
+            # # new_cx = cx + border_amt
+            # # new_cy = cy + border_amt
+            # img = image.copy()
+            # cv2.rectangle(img, (new_x, new_y), (new_x + w, new_y + h), (0, 255, 0), 2)
+            # self.preview_image(img, 'intersec')
+            # self.detect_image(image)
+            
+            if w < 10 or h < 10:
+                continue
+            # Calculate the center for this contour (for both notes and rests)
+            cx = x + w / 2
+            cy = y + h / 2   
+
+            roi = image[y:y+h, x:x+w]
+
+            # Check if this contour is a rest
+            rest_type = self.detect_rest(contour, image)
+            if rest_type:
+                notes.append({
+                    'x': cx,
+                    'y': cy,
+                    'note': rest_type,
+                    'duration': rest_type,
+                    'midi_note': 0  # No MIDI for rests
+                })
+                continue
+            
+            # Find widest horizontal section
+            horizontal_splits = 5
+            max_width = 0
+            notehead_y_center = y + h // 2
+            
+            for i in range(horizontal_splits):
+                y_pos = y + (i * h) // horizontal_splits
+                y_next = y + ((i + 1) * h) // horizontal_splits
+                
+                mask = (points[:, 1] >= y_pos) & (points[:, 1] < y_next)
+                slice_pts = points[mask]
+                
+                if len(slice_pts) > 0:
+                    width = slice_pts[:, 0].max() - slice_pts[:, 0].min()
+
+                    if width > max_width:
+                        max_width = width
+                        notehead_y_center = (y_pos + y_next) // 2
+            
+            # Get points near the widest region (note head)
+            y_tolerance = h // 4
+            mask = np.abs(points[:, 1] - notehead_y_center) < y_tolerance
+            head_points = points[mask]
+
+            topmost = None
+            bottommost = None
+            leftmost = tuple(contour[contour[:, :, 0].argmin()][0])
+            rightmost = tuple(contour[contour[:, :, 0].argmax()][0])
+
+            if len(head_points) > 0:
+                topmost = tuple(head_points[head_points[:, 1].argmin()])
+                bottommost = tuple(head_points[head_points[:, 1].argmax()])
+            else:
+                topmost = tuple(points[points[:, 1].argmin()])
+                bottommost = tuple(points[points[:, 1].argmax()])
+
+            top = topmost[1]
+            bottom = bottommost[1]
+            left = leftmost[0]
+            right = rightmost[0]
+
+            cy = top + (bottom - top) / 2
+            cx = left + (right - left) / 2
+            note_name = self.map_position_to_note(cy, [line["y"] for line in staff_lines])
+
+            
+
+            # Find if a note is filled or hollow
+            mask = np.zeros_like(image)
+            cv2.drawContours(mask, [contour], -1, 255, -1)
+
+            roi = original_image[top:bottom, left:right]
+            _, thresh = cv2.threshold(roi, 127, 255, cv2.THRESH_BINARY_INV)
+
+            head_contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            head = max(head_contours, key=cv2.contourArea)
+
+            mask = np.zeros_like(thresh)
+            cv2.drawContours(mask, [head], -1, 255, -1)  # Fill the contour (white on black mask)
+
+            # Compute pixel counts within the mask
+            notehead_area = cv2.countNonZero(mask)
+            filled_area = cv2.countNonZero(cv2.bitwise_and(thresh, thresh, mask=mask))
+
+            filled_ratio = filled_area / notehead_area if notehead_area > 0 else 0
+
+            # For notes
+            duration = None
+            #1. Flag-based duration for 8th/16th (returns None for no flags)
+            duration_flag, flag_count = self.detect_note_flags(contour, image, count)
+            tester = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+            cv2.drawContours(tester, [contour], -1, (255, 0, 255), -1)
+            self.preview_image(tester, 'tester')
+            # print('duration flag', flag_count)
+            # print('////////////////', (bottom - top) , (right - left), (bottom - top) <= 0 , (right - left) <= 0 )
+            if (bottom - top) <= 0 or (right - left) <= 0:
+                print('bad')
+                continue  # skip malformed contours
+            if duration_flag and filled_ratio > 0.37:
+                duration = duration_flag
+
+                x_vals = contour[:, 0, 0]
+                y_vals = contour[:, 0, 1]
+                x_split = np.mean(x_vals)
+                y_split = np.mean(y_vals)
+
+                # Get bottom half of note contour
+                bottom_half = [pt for pt in points if pt[1] >= y_split]
+                bottom_contour = np.array(bottom_half).reshape(-1, 1, 2)
+
+                # cv2.circle(vis_image, (int(x_split + border_amt), int(y_split + border_amt)), 6, (255, 0, 255), -1)
+
+                contour_left = []
+                contour_right = []
+
+                for pt in bottom_contour:
+                    if pt[0][0] < x_split:
+                        contour_left.append(pt)
+                    else:
+                        contour_right.append(pt)
+
+                x_vals = np.array(contour_left)[:, 0, 0]
+                y_vals = np.array(contour_left)[:, 0, 1]
+                x_split = np.mean(x_vals)
+                y_split = np.mean(y_vals)
+
+                cv2.circle(vis_image, (int(x_split + border_amt), int(y_split + border_amt)), 6, (255, 0, 255), -1)
+                x_vals = np.array(contour_right)[:, 0, 0]
+                y_vals = np.array(contour_right)[:, 0, 1]
+                x_split = np.mean(x_vals)
+                y_split = np.mean(y_vals)
+
+                cv2.circle(vis_image, (int(x_split + border_amt), int(y_split + border_amt)), 6, (255, 0, 255), -1)
+
+                if len(contour_left) >= 3:
+                    split_contours.append({'contour': np.array(contour_left), 'duration': duration})
+                if len(contour_right) >= 3:
+                    split_contours.append({'contour': np.array(contour_right), 'duration': duration})
+
+                # cp = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+                # cv2.drawContours(cp, [contour], -1, (255,0,255), 1)
+                # cv2.drawContours(cp, [bottom_contour], -1, (0,255,0), 1)
+                # self.preview_image(cp, "cp")
+                print('split')
+                continue
+            else:
+            # Determine note duration based on fill ratio
+                if filled_ratio > .9:
+                    duration = 'quarter'  # Solid note head
+                elif filled_ratio > 0.7:
+                    duration = 'half'     # Partially filled
+                else:
+                    duration = 'whole'    # Hollow note head
+                print('else')
+            # print(f"x={cx}, y={cy}, filled_ratio={filled_ratio:.2f}, flag_cnts={flag_count}, assigned:{duration}")
+            print('//////////////// final duratino', duration)
+
+            note_name = self.map_position_to_note(cy, [line["y"] for line in staff_lines])
+            print('name')
+            if note_name:
+                notes.append({
+                    'x': cx,
+                    'y': cy,
+                    'note': note_name,
+                    'duration': duration,
+                    'midi_note': self.note_mapping.get(note_name, 60),
+                })
+                
+                # Draw detection on visualization
+                new_x = x + border_amt
+                new_y = y + border_amt
+                new_cx = cx + border_amt
+                new_cy = cy + border_amt
+                cv2.rectangle(vis_image, (new_x, new_y), (new_x + w, new_y + h), (0, 255, 0), 2)
+                cv2.putText(vis_image, f"{note_name} ({duration})", 
+                            (new_x, new_y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+                cv2.putText(vis_image, f"Filled Ratio({filled_ratio:.1f})", 
+                            (new_x, new_y + h + 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
+                cv2.putText(vis_image, f"Flags({flag_count:.1f})", 
+                            (new_x, new_y + h + 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
+                cv2.circle(vis_image, (int(new_cx), int(new_cy)), 3, (0, 0, 255), -1)
+            print('end')
+        split_img = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+        cv2.drawContours(split_img, [item['contour'] for item in split_contours], -1, (0,255,0), 1)
+        # self.preview_image(split_img, 'split_img')
+        # print(split_contours['contour'])
+        contour_list = [d['contour'] for d in split_contours]
+
+        adjacent, adjacent_indices = self.are_adjacent(contour_list, image)
+
+        split_contours = list(split_contours)      # ensure contours is a list
+        adjacent = list(adjacent) 
+        indices_to_remove = set()
+        contours_to_add = []
+
+        for pair in adjacent_indices:
+            indices_to_remove.update(pair)
+        indices_to_remove = sorted(indices_to_remove, reverse=True)
+
+        for idx in indices_to_remove:
+            for c in adjacent:
+                contours_to_add.append({'contour': c, 'duration': split_contours[idx]['duration']})
+            del split_contours[idx]
+        # print(adjacent)
+        contours_to_add =list(contours_to_add)
+        split_contours += contours_to_add
+        split_contours = np.array(split_contours)
+
+        # for split_contour in split_contours:
+        print(split_contours[0]['contour'])
+        # return
+        for split_contour in split_contours:
+            print(split_contour)
+            points = split_contour['contour'].reshape(-1, 2)
+            x, y, w, h = cv2.boundingRect(split_contour['contour'])
+            new_x = x + border_amt
+            new_y = y + border_amt
+            cv2.circle(vis_image, (int(new_x), int(new_y)), 6, (0, 255, 255), -1)
+            cv2.circle(vis_image, (int(new_x + w), int(new_y)), 6, (0, 255, 255), -1)
+            
+            if w < 10 or h < 10:
+                continue
+            # Calculate the center for this contour (for both notes and rests)
+            cx = x + w / 2
+            cy = y + h / 2   
+            cv2.circle(vis_image, (int(x + border_amt), int(y + border_amt)), 6, (0,0,0), -1)
+
+            # # Get bottom half of note contour
+            # bottom_half = [pt for pt in points if pt[1] >= cy]
+            # split_contour['contour'] = np.array(bottom_half).reshape(-1, 1, 2)
+
+            roi = image[y:y+h, x:x+w]
+
+            # Check if this contour is a rest
+            rest_type = self.detect_rest(split_contour['contour'], image)
+            if rest_type:
+                notes.append({
+                    'x': cx,
+                    'y': cy,
+                    'note': rest_type,
+                    'duration': rest_type,
+                    'midi_note': 0  # No MIDI for rests
+                })
+                continue
+            
+            # Find widest horizontal section
+            horizontal_splits = 5
+            max_width = 0
+            notehead_y_center = y + h // 2
+            
+            for i in range(horizontal_splits):
+                y_pos = y + (i * h) // horizontal_splits
+                y_next = y + ((i + 1) * h) // horizontal_splits
+                
+                mask = (points[:, 1] >= y_pos) & (points[:, 1] < y_next)
+                slice_pts = points[mask]
+                
+                if len(slice_pts) > 0:
+                    width = slice_pts[:, 0].max() - slice_pts[:, 0].min()
+
+                    if width > max_width:
+                        max_width = width
+                        notehead_y_center = (y_pos + y_next) // 2
+            
+            # Get points near the widest region (note head)
+            y_tolerance = h // 4
+            mask = np.abs(points[:, 1] - notehead_y_center) < y_tolerance
+            head_points = points[mask]
+
+            topmost = None
+            bottommost = None
+            leftmost = tuple(split_contour['contour'][split_contour['contour'][:, :, 0].argmin()][0])
+            rightmost = tuple(split_contour['contour'][split_contour['contour'][:, :, 0].argmax()][0])
+
+            if len(head_points) > 0:
+                topmost = tuple(head_points[head_points[:, 1].argmin()])
+                bottommost = tuple(head_points[head_points[:, 1].argmax()])
+            else:
+                topmost = tuple(points[points[:, 1].argmin()])
+                bottommost = tuple(points[points[:, 1].argmax()])
+
+            top = topmost[1]
+            bottom = bottommost[1]
+            left = leftmost[0]
+            right = rightmost[0]
+
+            cy = top + (bottom - top) / 2
+            cx = left + (right - left) / 2
+            note_name = self.map_position_to_note(cy, [line["y"] for line in staff_lines])
+
+            # # Get bottom half of note contour
+            # bottom_half = [pt for pt in points if pt[1] >= cy]
+            # split_contour['contour'] = np.array(bottom_half).reshape(-1, 1, 2)
+
+            # Find if a note is filled or hollow
+            mask = np.zeros_like(image)
+            cv2.drawContours(mask, [split_contour['contour']], -1, 255, -1)
+
+            roi = original_image[top:bottom, left:right]
+            _, thresh = cv2.threshold(roi, 127, 255, cv2.THRESH_BINARY_INV)
+
+            head_contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            head = max(head_contours, key=cv2.contourArea)
+
+            mask = np.zeros_like(thresh)
+            cv2.drawContours(mask, [head], -1, 255, -1)  # Fill the contour (white on black mask)
+
+            # Compute pixel counts within the mask
+            notehead_area = cv2.countNonZero(mask)
+            filled_area = cv2.countNonZero(cv2.bitwise_and(thresh, thresh, mask=mask))
+
+            filled_ratio = filled_area / notehead_area if notehead_area > 0 else 0
+
+            # For notes
+            duration = split_contour['duration']
+            #1. Flag-based duration for 8th/16th (returns None for no flags)
+            duration_flag, flag_count = self.detect_note_flags(split_contour['contour'], image, count)
+            
+
+            note_name = self.map_position_to_note(cy, [line["y"] for line in staff_lines])
+            
+            if note_name:
+                notes.append({
+                    'x': cx,
+                    'y': cy,
+                    'note': note_name,
+                    'duration': duration,
+                    'midi_note': self.note_mapping.get(note_name, 60),
+                })
+                
+                # Draw detection on visualization
+                new_x = x + border_amt
+                new_y = y + border_amt
+                new_cx = cx + border_amt
+                new_cy = cy + border_amt
+                cv2.rectangle(vis_image, (new_x, new_y), (new_x + w, new_y + h), (0, 255, 0), 2)
+                cv2.putText(vis_image, f"{note_name} ({duration})", 
+                            (new_x, new_y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+                cv2.putText(vis_image, f"Filled Ratio({filled_ratio:.1f})", 
+                            (new_x, new_y + h + 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
+                cv2.putText(vis_image, f"Flags({flag_count:.1f})", 
+                            (new_x, new_y + h + 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
+                cv2.circle(vis_image, (int(new_cx), int(new_cy)), 3, (0, 0, 255), -1)
+
+        self.preview_image(vis_image, f"{image_name.split(".")[0]}_detection_visualization")
+        # self.preview_image(viss_image, f"{image_name.split(".")[0]}_outer")
+        
+
+        # Sort notes by x-position (left to right)
+        notes.sort(key=lambda x: x['x'])
+
+        return notes
+    
+    def temp(self, image: np.ndarray, contours,  staff_lines: List[Dict], save_preview: bool = False, image_name: str = "image", original_image: np.ndarray = None): 
+        border_amt = 50
+        notes = []
+        split_contours = []
+
         for contour in contours:
             points = contour.reshape(-1, 2)
             x, y, w, h = cv2.boundingRect(contour)
@@ -288,18 +711,34 @@ class SheetMusicPlayer:
             left = leftmost[0]
             right = rightmost[0]
 
-
             cy = top + (bottom - top) / 2
             cx = left + (right - left) / 2
             note_name = self.map_position_to_note(cy, [line["y"] for line in staff_lines])
 
-            
-
+            # Find if a note is filled or hollow
             mask = np.zeros_like(image)
-            cv2.drawContours(mask, [contour], -1, 255, -1)
+            # cv2.drawContours(mask, split_contour[contour], -1, 255, -1)
 
-            roi = image[top:bottom, left:right]
-            filled_ratio = np.sum(roi == 0) / ((right - left) * (bottom - top))
+            roi = original_image[top:bottom, left:right]
+            _, thresh = cv2.threshold(roi, 127, 255, cv2.THRESH_BINARY_INV)
+
+            head_contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            head = max(head_contours, key=cv2.contourArea)
+
+            mask = np.zeros_like(thresh)
+            cv2.drawContours(mask, [head], -1, 255, -1)  # Fill the contour (white on black mask)
+
+            # Compute pixel counts within the mask
+            notehead_area = cv2.countNonZero(mask)
+            filled_area = cv2.countNonZero(cv2.bitwise_and(thresh, thresh, mask=mask))
+
+            filled_ratio = filled_area / notehead_area if notehead_area > 0 else 0
+
+            # self.preview_image(roi, 'roi')
+            # self.preview_image(mask, 'mask')
+            # self.preview_image(mask, 'thresh')
+            # print('len', filled_area, notehead_area)
+
             # For notes
             duration = None
             #1. Flag-based duration for 8th/16th (returns None for no flags)
@@ -308,15 +747,16 @@ class SheetMusicPlayer:
                 continue  # skip malformed contours
             if duration_flag and filled_ratio > 0.37:
                 duration = duration_flag
+                print('duration', duration)
             else:
             # Determine note duration based on fill ratio
-                if filled_ratio > 0.45:
+                if filled_ratio > .9:
                     duration = 'quarter'  # Solid note head
-                elif filled_ratio > 0.25:
+                elif filled_ratio > 0.7:
                     duration = 'half'     # Partially filled
                 else:
                     duration = 'whole'    # Hollow note head
-            print(f"x={cx}, y={cy}, filled_ratio={filled_ratio:.2f}, flag_cnts={flag_count}, assigned:{duration}")
+            # print(f"x={cx}, y={cy}, filled_ratio={filled_ratio:.2f}, flag_cnts={flag_count}, assigned:{duration}")
             
 
             note_name = self.map_position_to_note(cy, [line["y"] for line in staff_lines])
@@ -329,22 +769,6 @@ class SheetMusicPlayer:
                     'duration': duration,
                     'midi_note': self.note_mapping.get(note_name, 60),
                 })
-                
-                # Draw detection on visualization
-                cv2.rectangle(vis_image, (x, y), (x + w, y + h), (0, 255, 0), 2)
-                cv2.putText(vis_image, f"{note_name} ({duration})", 
-                            (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-                cv2.putText(vis_image, f"Filled Ratio({filled_ratio:.1f})", 
-                            (x, y + h + 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
-                cv2.circle(vis_image, (int(cx), int(cy)), 3, (0, 0, 255), -1)
-
-        self.preview_image(vis_image, f"{image_name.split(".")[0]}_detection_visualization")
-        # self.preview_image(viss_image, f"{image_name.split(".")[0]}_outer")
-        
-
-        # Sort notes by x-position (left to right)
-        notes.sort(key=lambda x: x['x'])
-
         return notes
         
     def map_position_to_note(self, y_pos: int, staff_lines: List[int]) -> Optional[str]:
@@ -414,7 +838,7 @@ class SheetMusicPlayer:
             return 'eighth'
 
     
-    def detect_note_flags(self, contour, image) -> Tuple[Optional[str], int]:
+    def detect_note_flags(self, contour, image, index) -> Tuple[Optional[str], int]:
         """
         Detect note duration based on presence of flags (eighth, sixteenth).
         Returns: 'quarter', 'eighth', or 'sixteenth'
@@ -447,6 +871,8 @@ class SheetMusicPlayer:
 
         flag_img = cv2.morphologyEx(flag_region, cv2.MORPH_OPEN, flag_kernel)
         flag_cnts, _ = cv2.findContours(flag_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # self.preview_image(flag_img, 'flag_img')
+        # print('flag_cnts', len(flag_cnts))
 
         #Filter by area
         min_flag_area = 12 #may need to adjust
@@ -464,14 +890,119 @@ class SheetMusicPlayer:
                     flag_cnts_filtered.append(cnt)
         
         print(f"x={x}, y={y}, w={w}, h={h}, flag_cnts={len(flag_cnts_filtered)}")
+        print('index: ', index)
+
         flag_cnts = flag_cnts_filtered
+
+        border_amt = 50
+        new_x = x
+        new_y = y
+        # new_cx = cx + border_amt
+        # new_cy = cy + border_amt
+        img = cv2.cvtColor(image.copy(), cv2.COLOR_GRAY2BGR)
+        # cv2.rectangle(img, (new_x, new_y), (new_x + w, new_y + h), (0, 255, 0), 2)
+        # cv2.drawContours(img, flag_cnts, -1, (0,255,0), 1)
+        # self.preview_image(img, 'img')
+        # print('preview')
+
+        x, y, w, h = cv2.boundingRect(contour)
+        # print(x, y, w, h)
+        border_amt = 50
+        new_x = x
+        new_y = y
+        # new_cx = cx + border_amt
+        # new_cy = cy + border_amt
+        img = cv2.cvtColor(image.copy(), cv2.COLOR_GRAY2BGR)
+        cv2.rectangle(self.img, (new_x, new_y), (new_x + w, new_y + h), (0, 255, 0), 2)
+        cv2.circle(self.img, (int(new_x), int(new_y)), 3, (0, 0, 255), -1)
+        cv2.circle(self.img, (int(new_x + w), int(new_y)), 3, (0, 0, 255), -1)
+        # self.preview_image(self.img, 'contour')
+
         
         flag_count = len(flag_cnts)
         if len(flag_cnts) == 1:
+            print('func dur', 'eighth')
             return 'eighth', flag_count
         elif len(flag_cnts) >= 2:
+            print('func dur', 'sixteenth')
             return 'sixteenth', flag_count
+        # elif flag_count == 0:
+        #     print('|||||||||||||||||| ')
+        
         return None, flag_count
+    
+    
+    def detect_image(self, image) -> Tuple[Optional[str], int]:
+        """
+        Detect note duration based on presence of flags (eighth, sixteenth).
+        Returns: 'quarter', 'eighth', or 'sixteenth'
+        """
+
+        contours, _ = self.extract_note_contours_from_clean(image)
+        # self.preview_image(image, 'detect image')
+        for contour in contours:
+            x, y, w, h = cv2.boundingRect(contour)
+            roi = image[y:y+h, x:x+w]
+
+            border_amt = 50
+            new_x = x
+            new_y = y
+            # new_cx = cx + border_amt
+            # new_cy = cy + border_amt
+            img = image.copy()
+            cv2.rectangle(img, (new_x, new_y), (new_x + w, new_y + h), (0, 255, 0), 2)
+            # self.preview_image(img, 'img')
+            
+            # Only look for stems
+            vertical_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(2, h//3)))
+            stem_img = cv2.morphologyEx(roi, cv2.MORPH_OPEN, vertical_kernel)
+            stem_cnts, _ = cv2.findContours(stem_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+            # If not stem found
+            if len(stem_cnts) == 0:
+                return None, 0
+
+            # Estimate stem orientation
+            stem_pixels = np.column_stack(np.where(stem_img > 0))
+            stem_y_mean = np.mean(stem_pixels[:, 0]) if stem_pixels.size > 0 else h //2
+            head_center_y = h // 2
+
+            #If stem tip is above notehead, look for lfag at top else at bottom
+            if stem_y_mean < head_center_y:
+                flag_region = roi[:int(h * 0.20),:]
+            else:
+                flag_region = roi[int(h * 0.80):,:]
+            
+            # Now: check for flags to the right/below stem base
+            flag_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (max(2, w//18), 3))
+
+            flag_img = cv2.morphologyEx(flag_region, cv2.MORPH_OPEN, flag_kernel)
+            flag_cnts, _ = cv2.findContours(flag_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+            #Filter by area
+            min_flag_area = 12 #may need to adjust
+            min_flag_width = max(4, w // 10)
+            flag_region_height = flag_region.shape[0]
+            max_flag_width_fraction = 0.6
+            
+            flag_cnts_filtered = []    
+            for cnt  in flag_cnts:
+                x2,y2,w2,h2 = cv2.boundingRect(cnt)
+                if (
+                    cv2.contourArea(cnt) > min_flag_area and w2 > min_flag_width and w2 < max_flag_width_fraction * w
+                ):
+                    if abs(y2) < 4 or abs((y2 + h2) - flag_region_height) < 4:
+                        flag_cnts_filtered.append(cnt)
+            
+            print(f"x={x}, y={y}, w={w}, h={h}, flag_cnts={len(flag_cnts_filtered)}")
+            flag_cnts = flag_cnts_filtered
+            
+            flag_count = len(flag_cnts)
+            # if len(flag_cnts) == 1:
+            #     return 'eighth', flag_count
+            # elif len(flag_cnts) >= 2:
+            #     return 'sixteenth', flag_count
+            # return None, flag_count
         
     
     def detect_rest(self, contour, image) -> Optional[str]:
@@ -631,6 +1162,8 @@ class SheetMusicPlayer:
             cleaned_image = self.remove_staff_lines(resized_image)
             refilled_image = self.refill_notes(cleaned_image)
             self.preview_image(refilled_image, "Without staff lines")
+            self.img = refilled_image.copy()
+
             notes = self.detect_notes_by_intersection(refilled_image, staff_lines, save_preview, image_name, original_image=resized_image)
 
             if not notes:
