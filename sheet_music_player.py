@@ -48,6 +48,7 @@ class SheetMusicPlayer:
         
         # MIDI note mapping for treble clef (C4 to C6)
         self.note_mapping = {
+            'C3': 48, 'D3': 50, 'E3': 52, 'F3': 53, 'G3': 55, 'A3': 57, 'B3': 59,
             'C4': 60, 'D4': 62, 'E4': 64, 'F4': 65, 'G4': 67, 'A4': 69, 'B4': 71,
             'C5': 72, 'D5': 74, 'E5': 76, 'F5': 77, 'G5': 79, 'A5': 81, 'B5': 83,
             'C6': 84
@@ -583,8 +584,8 @@ class SheetMusicPlayer:
             -2: 'C6', -1.5: 'B5', -1: 'A5', -0.5: 'G5', 0: 'F5',
             0.5: 'E5', 1: 'D5', 1.5: 'C5', 2: 'B4', 2.5: 'A4',
             3: 'G4', 3.5: 'F4', 4: 'E4', 4.5: 'D4', 5: 'C4',
-            5.5: 'B4', 6: 'A4', 6.5: 'G4', 7: 'F4', 7.5: 'E4', 
-            8: 'D4', 8.5: 'C4'
+            5.5: 'B3', 6: 'A3', 6.5: 'G3', 7: 'F3', 7.5: 'E3', 
+            8: 'D3', 8.5: 'C3'
         }
 
         # Find closest position
@@ -600,46 +601,38 @@ class SheetMusicPlayer:
         Detect note duration based on presence of flags (eighth, sixteenth).
         Returns: 'quarter', 'eighth', or 'sixteenth'
         """
-        print('||||||||||||||||||||')
         x, y, w, h = cv2.boundingRect(contour)
-        roi = image[y:y+h, x:x+w]
 
-        img = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
-        cv2.drawContours(img, [contour], -1, (255, 0, 255), thickness=2)
-        cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 2)
+        roi = image[y:y+h, x:x+w+1]
 
         # Only look for stems
         vertical_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(2, h//3)))
         stem_img = cv2.morphologyEx(roi, cv2.MORPH_OPEN, vertical_kernel)
         stem_cnts, _ = cv2.findContours(stem_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        stemg = cv2.cvtColor(stem_img, cv2.COLOR_GRAY2BGR)
-        cv2.drawContours(stem_img, stem_cnts, -1, (255, 0, 255), thickness=2)
-        print(len(stem_cnts))
-        # self.preview_image(stemg, 'stem_img')
-
+        
         # If not stem found
-        # print('len(stem_cnts)',len(stem_cnts))
         if len(stem_cnts) == 0:
             return None, 0
 
         # Estimate stem orientation
         stem_pixels = np.column_stack(np.where(stem_img > 0))
-        stem_y_mean = np.mean(stem_pixels[:, 0]) if stem_pixels.size > 0 else h //2
-        head_center_y = h // 2
+        # stem_y_mean = np.mean(stem_pixels[:, 0]) if stem_pixels.size > 0 else h //2
+        # head_center_y = h // 2
+        # self.preview_image(img, 'stem_img')
 
         #If stem tip is above notehead, look for flag at top else at bottom
-        if stem_y_mean < head_center_y:
-            flag_region = roi[:int(h * 0.20),:]
-        else:
-            flag_region = roi[int(h * 0.80):,:]
+        # if stem_y_mean < head_center_y:
+        flag_region = roi[:int(h * 0.20),:]
+        # else:
+        #     flag_region = roi[int(h * 0.80):,:]
         
          # Now: check for flags to the right/below stem base
         flag_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (max(2, w//18), 3))
 
         flag_img = cv2.morphologyEx(flag_region, cv2.MORPH_OPEN, flag_kernel)
-        # self.preview_image(flag_region, 'flag_img')
+        # self.preview_image(flag_img, 'flag_img')
         flag_cnts, _ = cv2.findContours(flag_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        # cv2.drawContours(img, flag_cnts, -1, (0, 255, 255), thickness=2)
+
         #Filter by area
         min_flag_area = 12 #may need to adjust
         min_flag_width = max(4, w // 10)
@@ -650,8 +643,7 @@ class SheetMusicPlayer:
 
         for cnt in flag_cnts:
             x2,y2,w2,h2 = cv2.boundingRect(cnt)
-            print(w2 < max_flag_width_fraction * w)
-            print(w2, max_flag_width_fraction , w)
+
             if (
                 cv2.contourArea(cnt) > min_flag_area and w2 > min_flag_width and w2 < max_flag_width_fraction * w
             ):
@@ -662,8 +654,7 @@ class SheetMusicPlayer:
 
         x, y, w, h = cv2.boundingRect(contour)
         flag_count = len(flag_cnts)
-        print(flag_count)
-        # self.preview_image(img, 'img')
+
         if len(flag_cnts) == 1:
             return 'eighth', flag_count
         elif len(flag_cnts) >= 2:
