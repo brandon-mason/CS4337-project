@@ -72,23 +72,8 @@ class SheetMusicPlayer:
         Args:
             image: The image to display
             name: The name of the window
-            
-        Returns:
-            Preprocessed image as numpy array
         """
-
-        # bordered = cv2.copyMakeBorder(
-        #         image, 
-        #         30, 
-        #         30, 
-        #         30, 
-        #         30, 
-        #         cv2.BORDER_CONSTANT, 
-        #         value=(255)
-        #         )
-        cv2.imshow(name, image)
-        cv2.waitKey(0)
-        # cv2.destroyAllWindows()
+        cv2.imwrite(f"preview_directory/{name}", image)
         return
     
     def preprocess_image(self, image: np.ndarray, save_preview: bool = False, image_name = "image") -> np.ndarray:
@@ -108,15 +93,12 @@ class SheetMusicPlayer:
         clahe = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(8,8))
         enhanced = clahe.apply(gray)
 
-        # Adaptive threshold with larger block size and smaller constant
-        # Larger blockSize (e.g., 51-101) preserves more detail
-        # Smaller C value (e.g., 5-8) makes threshold less aggressive
         thresh = cv2.adaptiveThreshold(
             enhanced, 255,
             cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
             cv2.THRESH_BINARY_INV, 
-            blockSize=101,  # Increased from 35
-            C=3            # Reduced from 11
+            blockSize=101, 
+            C=3            
         )
 
         return thresh
@@ -139,7 +121,6 @@ class SheetMusicPlayer:
         
         # Detect horizontal lines
         horizontal_lines = cv2.morphologyEx(processed_image, cv2.MORPH_OPEN, horizontal_kernel)
-        # self.preview_image(horizontal_lines, "hl")
         
         # Find contours of horizontal lines
         contours, _ = cv2.findContours(horizontal_lines, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -198,7 +179,6 @@ class SheetMusicPlayer:
         if not (staff_height > 90 and staff_height < 100):
             scalar = 100 / staff_height
             resized_image = cv2.resize(original_image, None, fx=scalar, fy=scalar, interpolation=cv2.INTER_LINEAR)
-            # self.preview_image(resized_image)
 
             # Recalculate the staff dimensions based on the new image size
             new_staff_lines = []
@@ -213,16 +193,132 @@ class SheetMusicPlayer:
 
         return original_image, staff_lines
     
+    def remove_staff_lines(self, image: np.ndarray, y_top_line, y_bottom_line) -> np.ndarray:
+        """
+        Remove staff lines from a sheet music image.
+        
+        Args:
+            image: Original sheet music image (BGR or grayscale)
+        
+        Returns:
+            Image with staff lines removed
+        """
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+        # Threshold to get binary image (invert to make staff lines white)
+        _, binary = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY_INV)
+
+        detected_lines = np.zeros_like(binary)
+        detected_ledger = np.zeros_like(binary)
+
+        # Define ROIs
+        roi_inner = binary[y_top_line:y_bottom_line, :]
+        roi_top = binary[:y_top_line, :]
+        roi_bottom = binary[y_bottom_line:, :]
+
+        # Define kernels
+        horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (100, 1))
+        horizontal_kernel_ledger = cv2.getStructuringElement(cv2.MORPH_RECT, (25, 1))
+
+        # Detect staff lines (inner region)
+        detected_lines_roi = cv2.morphologyEx(roi_inner, cv2.MORPH_OPEN, horizontal_kernel, iterations=2)
+        detected_lines[y_top_line:y_bottom_line, :] = detected_lines_roi
+
+        # Detect ledger lines (top region)
+        detected_ledger_roi_top = cv2.morphologyEx(roi_top, cv2.MORPH_OPEN, horizontal_kernel_ledger, iterations=2)
+        detected_ledger[:y_top_line, :] = detected_ledger_roi_top
+
+        # Detect ledger lines (bottom region)
+        detected_ledger_roi_bottom = cv2.morphologyEx(roi_bottom, cv2.MORPH_OPEN, horizontal_kernel_ledger, iterations=2)
+        detected_ledger[y_bottom_line:, :] = detected_ledger_roi_bottom
+
+        # Combine all detected lines
+        all_lines = cv2.bitwise_or(detected_lines, detected_ledger)
+
+        # Subtract all lines at once
+        no_lines = cv2.subtract(binary, all_lines)
+        no_staff = cv2.subtract(binary, detected_lines)
+
+        # Invert back to normal (black lines on white)
+        cleaned = cv2.bitwise_not(no_lines)
+
+        if len(cleaned.shape) == 2:
+            cleaned = cv2.cvtColor(cleaned, cv2.COLOR_GRAY2BGR)
+
+        return cleaned
+    
+    def refill_notes(self, image):
+        """
+        Restore note heads that were partially removed with staff line removal.
+        Uses morphological operations to close gaps and refill circles.
+        
+        Args:
+            image: Cleaned BGR or grayscale image (after staff line removal)
+        
+        Returns:
+            Image with note heads refilled
+        """
+        # Convert to grayscale if necessary
+        if len(image.shape) == 3:
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = image.copy()
+
+        # Convert to binary (invert so black = background, white = foreground)
+        _, binary = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY_INV)
+
+        # Close small gaps in note heads 
+        # Try a circular/elliptical kernel that roughly matches note size
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (6, 5))
+        closed = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=2)
+
+        # Optionally, dilate slightly to thicken notes ---
+        kernel_dilate = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        dilated = cv2.dilate(closed, kernel_dilate, iterations=1)
+
+        # Invert back to normal (black notes on white) ---
+        refilled = cv2.bitwise_not(dilated)
+        if len(refilled.shape) == 2:
+            refilled = cv2.cvtColor(refilled, cv2.COLOR_GRAY2BGR)
+        return refilled
+    
+    def extract_note_contours_from_clean(self, image):
+        """
+        Extracts note (symbol) contours from a staff-line-removed, binarized sheet music image.
+        Args:
+            img_nostaff (np.ndarray): Binarized image from which staff lines have been removed.
+        Returns:
+            contours (list): List of note contours found in the image.
+            binary_contour_img (np.ndarray): Image with detected contours drawn.
+        """
+        # Ensure the image is binary (if not already)
+        img_nostaff = None
+        if len(image.shape) == 3:
+            # Convert to grayscale
+            img_nostaff = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        else:
+            img_nostaff = image
+            
+        _, binary = cv2.threshold(img_nostaff, 128, 255, cv2.THRESH_BINARY_INV)
+
+        # Find external contours
+        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        # Optional: create an image for visualizing contours
+        contour_img = cv2.cvtColor(img_nostaff, cv2.COLOR_GRAY2BGR)
+        cv2.drawContours(contour_img, contours, -1, (255,0,255), thickness=2)
+
+        return contours, contour_img
+    
     def are_adjacent(self, contours, image):
-        imagee = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
         adjacent = []
         adjacent_indices = []
         for i, c1 in enumerate(contours):
-            x1, y1, w1, h1 = cv2.boundingRect(c1)
+            x1, _, w1, _ = cv2.boundingRect(c1)
             for j, c2 in enumerate(contours):
                 if i == j:
                     continue
-                x2, y2, w2, h2 = cv2.boundingRect(c2)
+                x2, _, _, _ = cv2.boundingRect(c2)
                 if x2 - x1 == w1:
                     merged_points = np.vstack([c1, c2])
                     hull = cv2.convexHull(merged_points)
@@ -230,7 +326,7 @@ class SheetMusicPlayer:
                     adjacent_indices.append((i, j))
         return adjacent, adjacent_indices
 
-    def detect_notes_by_intersection(self, image: np.ndarray, staff_lines: List[Dict], save_preview: bool = False, image_name: str = "image", original_image: np.ndarray = None) -> List[Dict]:
+    def detect_notes_by_intersection(self, image: np.ndarray, staff_lines: List[Dict], save_preview: bool = False, image_name: str = "image.png", original_image: np.ndarray = None) -> List[Dict]:
         """
         Detect musical notes by checking intersections with staff lines.
         
@@ -247,7 +343,7 @@ class SheetMusicPlayer:
         split_contours = []
 
         # Create visualization image
-        vis_image0 = cv2.copyMakeBorder(
+        vis_image = cv2.copyMakeBorder(
             original_image, 
             border_amt, 
             border_amt, 
@@ -256,13 +352,10 @@ class SheetMusicPlayer:
             cv2.BORDER_CONSTANT, 
             value=(255,255,255)
         )
-        # self.preview_image(image, 'intersection')
-        contours, _ = self.extract_note_contours_from_clean(image)
+        
+        contours, contours_img = self.extract_note_contours_from_clean(image)
         image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         original_image = cv2.cvtColor(original_image, cv2.COLOR_BGR2GRAY)
-        vis_image = vis_image0.copy()
-        vis_image1 = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
-        cv2.drawContours(vis_image1, contours, -1, (0,255,0), 1)
         
         for contour in contours:
             points = contour.reshape(-1, 2)
@@ -335,9 +428,8 @@ class SheetMusicPlayer:
 
             # Find if a note is filled or hollow
             mask = np.zeros_like(image)
-            cv2.drawContours(mask, [contour], -1, 255, -1)
 
-            roi = original_image[top:bottom, left:right]
+            roi = image[top:bottom, left:right]
             _, thresh = cv2.threshold(roi, 127, 255, cv2.THRESH_BINARY_INV)
 
             head_contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -357,13 +449,9 @@ class SheetMusicPlayer:
             #1. Flag-based duration for 8th/16th (returns None for no flags)
             duration_flag, flag_count = self.detect_note_flags(contour, image)
 
-            tester = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
-            cv2.drawContours(tester, [contour], -1, (255, 0, 255), -1)
-            # self.preview_image(tester, 'tester')
-
             if (bottom - top) <= 0 or (right - left) <= 0:
                 continue  # skip malformed contours
-            if duration_flag and filled_ratio > 0.37:
+            if duration_flag:
                 duration = duration_flag
 
                 x_vals = contour[:, 0, 0]
@@ -417,11 +505,9 @@ class SheetMusicPlayer:
                 new_cy = cy + border_amt
                 cv2.rectangle(vis_image, (new_x, new_y), (new_x + w, new_y + h), (0, 255, 0), 2)
                 cv2.putText(vis_image, f"{note_name} ({duration})", 
-                            (new_x, new_y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+                            (new_x, new_y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
                 cv2.putText(vis_image, f"Filled Ratio({filled_ratio:.1f})", 
                             (new_x, new_y + h + 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
-                cv2.putText(vis_image, f"Flags({flag_count:.1f})", 
-                            (new_x, new_y + h + 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
                 cv2.circle(vis_image, (int(new_cx), int(new_cy)), 3, (0, 0, 255), -1)
 
         contour_list = [d['contour'] for d in split_contours]
@@ -546,13 +632,13 @@ class SheetMusicPlayer:
                 new_cy = cy + border_amt
                 cv2.rectangle(vis_image, (new_x, new_y), (new_x + w, new_y + h), (0, 255, 0), 2)
                 cv2.putText(vis_image, f"{note_name} ({duration})", 
-                            (new_x, new_y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+                            (new_x, new_y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
                 cv2.putText(vis_image, f"Filled Ratio({filled_ratio:.1f})", 
                             (new_x, new_y + h + 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
                 cv2.circle(vis_image, (int(new_cx), int(new_cy)), 3, (0, 0, 255), -1)
 
-        self.preview_image(vis_image, f"{image_name.split(".")[0]}_detection_visualization")
-        
+        if save_preview:
+            cv2.imwrite(f"preview_directory/{image_name.split(".")[0]}_preview.png", vis_image)
 
         # Sort notes by x-position (left to right)
         notes.sort(key=lambda x: x['x'])
@@ -591,7 +677,7 @@ class SheetMusicPlayer:
         # Find closest position
         closest_pos = min(note_positions.keys(), key=lambda x: abs(x - relative_pos))
         
-        if abs(closest_pos - relative_pos) < 0.5:  # Tolerance
+        if abs(closest_pos - relative_pos) < 0.5:
             return note_positions[closest_pos]
         
         return None
@@ -615,10 +701,9 @@ class SheetMusicPlayer:
             return None, 0
 
         # Estimate stem orientation
-        stem_pixels = np.column_stack(np.where(stem_img > 0))
+        # stem_pixels = np.column_stack(np.where(stem_img > 0))
         # stem_y_mean = np.mean(stem_pixels[:, 0]) if stem_pixels.size > 0 else h //2
         # head_center_y = h // 2
-        # self.preview_image(img, 'stem_img')
 
         #If stem tip is above notehead, look for flag at top else at bottom
         # if stem_y_mean < head_center_y:
@@ -630,7 +715,7 @@ class SheetMusicPlayer:
         flag_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (max(2, w//18), 3))
 
         flag_img = cv2.morphologyEx(flag_region, cv2.MORPH_OPEN, flag_kernel)
-        # self.preview_image(flag_img, 'flag_img')
+
         flag_cnts, _ = cv2.findContours(flag_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         #Filter by area
@@ -639,7 +724,7 @@ class SheetMusicPlayer:
         flag_region_height = flag_region.shape[0]
         max_flag_width_fraction = 0.6
         
-        flag_cnts_filtered = []    
+        flag_cnts_filtered = []   
 
         for cnt in flag_cnts:
             x2,y2,w2,h2 = cv2.boundingRect(cnt)
@@ -652,7 +737,6 @@ class SheetMusicPlayer:
 
         flag_cnts = flag_cnts_filtered
 
-        x, y, w, h = cv2.boundingRect(contour)
         flag_count = len(flag_cnts)
 
         if len(flag_cnts) == 1:
@@ -691,7 +775,7 @@ class SheetMusicPlayer:
             return None
         rest = cv2.matchTemplate(roi, resized_template, cv2.TM_CCOEFF_NORMED)
         min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(rest)
-        if max_val > 0.3:  # You may tune this threshold
+        if max_val > 0.3:
             return "rest_quarter"
         # print(f"Rest ROI shape: {roi.shape}, max_val: {max_val}")
         return None
@@ -715,7 +799,7 @@ class SheetMusicPlayer:
         except Exception as e:
             self.logger.exception(f"Error playing note {note_name}: {e}")
             
-    def play_sheet_music_image(self, original_image: np.ndarray, tempo: float = 120.0, save_preview: bool = False, image_name: str = "image"):
+    def play_sheet_music_image(self, original_image: np.ndarray, tempo: float = 120.0, save_preview: bool = False, image_name: str = "image.png"):
         """
         Read and play sheet music using color-based detection for staff lines and note intersections.
         
@@ -740,16 +824,20 @@ class SheetMusicPlayer:
 
             # Resize image based on staff size
             resized_image, resized_staff_lines = self.resize_by_staff_height(original_image, staff_lines)
-            cleaned_image = self.remove_staff_lines(resized_image)
+            cleaned_image = self.remove_staff_lines(resized_image, staff_lines[0]['y'], staff_lines[4]['y'])
             
             self.logger.info(f"Detected {len(resized_staff_lines)} staff lines")
 
             if len(staff_lines) != 5:
                 self.logger.exception("Invalid sheet music format")
                 return
+            
+            refilled_image = self.refill_notes(cleaned_image)
+            self.img = refilled_image.copy()
 
             # Detect notes by intersection
-            notes = self.detect_notes_by_intersection(cleaned_image, staff_lines, save_preview, image_name)
+            full_name = f"{image_name}.png"
+            notes = self.detect_notes_by_intersection(refilled_image, staff_lines, save_preview, full_name, original_image=resized_image)
 
             if not notes:
                 self.logger.exception("No notes detected")
@@ -815,11 +903,10 @@ class SheetMusicPlayer:
                 return
 
             # Detect notes by intersection
-            
-            # cleaned_image = self.remove_staff_lines(resized_image)
             cleaned_image = self.remove_staff_lines(resized_image, staff_lines[0]['y'], staff_lines[4]['y'])
             refilled_image = self.refill_notes(cleaned_image)
-            self.preview_image(refilled_image, "Without staff lines")
+            # if save_preview:
+                # self.preview_image(refilled_image, "Without staff lines")
             self.img = refilled_image.copy()
 
             notes = self.detect_notes_by_intersection(refilled_image, staff_lines, save_preview, image_name, original_image=resized_image)
@@ -863,152 +950,3 @@ class SheetMusicPlayer:
             
         except Exception as e:
             self.logger.exception(f"Error processing sheet music: {e}")
-
-    def remove_staff_lines(self, image: np.ndarray) -> np.ndarray:
-        """
-        Remove staff lines from a sheet music image.
-        
-        Args:
-            image: Original sheet music image (BGR or grayscale)
-        
-        Returns:
-            Image with staff lines removed
-        """
-        # Convert to grayscale
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        
-        # Threshold to get binary image (invert to make staff lines white)
-        _, binary = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY_INV)
-        
-        # Define horizontal kernel (same as in detect_staff_lines)
-        horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (100, 1))
-        
-        # Detect horizontal lines
-        detected_lines = cv2.morphologyEx(binary, cv2.MORPH_OPEN, horizontal_kernel, iterations=2)
-        
-        # Subtract the staff lines from the binary image
-        no_staff = cv2.subtract(binary, detected_lines)
-        
-        # Invert back to normal (black lines on white)
-        cleaned = cv2.bitwise_not(no_staff)
-        if len(cleaned.shape) == 2:
-            cleaned = cv2.cvtColor(cleaned, cv2.COLOR_GRAY2BGR)
-        
-        return cleaned
-    
-    def remove_staff_lines(self, image: np.ndarray, y_top_line, y_bottom_line) -> np.ndarray:
-        """
-        Remove staff lines from a sheet music image.
-        
-        Args:
-            image: Original sheet music image (BGR or grayscale)
-        
-        Returns:
-            Image with staff lines removed
-        """
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-
-        # Threshold to get binary image (invert to make staff lines white)
-        _, binary = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY_INV)
-
-        detected_lines = np.zeros_like(binary)
-        detected_ledger = np.zeros_like(binary)
-
-        # Define ROIs
-        roi_inner = binary[y_top_line:y_bottom_line, :]
-        roi_top = binary[:y_top_line, :]
-        roi_bottom = binary[y_bottom_line:, :]
-
-        # Define kernels
-        horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (100, 1))
-        horizontal_kernel_ledger = cv2.getStructuringElement(cv2.MORPH_RECT, (25, 1))
-
-        # Detect staff lines (inner region)
-        detected_lines_roi = cv2.morphologyEx(roi_inner, cv2.MORPH_OPEN, horizontal_kernel, iterations=2)
-        detected_lines[y_top_line:y_bottom_line, :] = detected_lines_roi
-
-        # Detect ledger lines (top region)
-        detected_ledger_roi_top = cv2.morphologyEx(roi_top, cv2.MORPH_OPEN, horizontal_kernel_ledger, iterations=2)
-        detected_ledger[:y_top_line, :] = detected_ledger_roi_top
-
-        # Detect ledger lines (bottom region)
-        detected_ledger_roi_bottom = cv2.morphologyEx(roi_bottom, cv2.MORPH_OPEN, horizontal_kernel_ledger, iterations=2)
-        detected_ledger[y_bottom_line:, :] = detected_ledger_roi_bottom
-
-        # FIXED: Combine all detected lines
-        all_lines = cv2.bitwise_or(detected_lines, detected_ledger)
-
-        # Subtract all lines at once
-        no_lines = cv2.subtract(binary, all_lines)
-        no_staff = cv2.subtract(binary, detected_lines)
-
-        # Invert back to normal (black lines on white)
-        cleaned = cv2.bitwise_not(no_lines)
-
-        if len(cleaned.shape) == 2:
-            cleaned = cv2.cvtColor(cleaned, cv2.COLOR_GRAY2BGR)
-
-        self.preview_image(cleaned, 'clean')
-        return cleaned
-    
-    def refill_notes(self, image):
-        """
-        Restore note heads that were partially removed with staff line removal.
-        Uses morphological operations to close gaps and refill circles.
-        
-        Args:
-            image: Cleaned BGR or grayscale image (after staff line removal)
-        
-        Returns:
-            Image with note heads refilled
-        """
-        # Convert to grayscale if necessary
-        if len(image.shape) == 3:
-            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        else:
-            gray = image.copy()
-
-        # Convert to binary (invert so black = background, white = foreground)
-        _, binary = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY_INV)
-
-        # Close small gaps in note heads 
-        # Try a circular/elliptical kernel that roughly matches note size
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (6, 5))
-        closed = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=2)
-
-        # Optionally, dilate slightly to thicken notes ---
-        kernel_dilate = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        dilated = cv2.dilate(closed, kernel_dilate, iterations=1)
-
-        # Invert back to normal (black notes on white) ---
-        refilled = cv2.bitwise_not(dilated)
-        if len(refilled.shape) == 2:
-            refilled = cv2.cvtColor(refilled, cv2.COLOR_GRAY2BGR)
-        return refilled
-
-    def extract_note_contours_from_clean(self, image):
-        """
-        Extracts note (symbol) contours from a staff-line-removed, binarized sheet music image.
-        Args:
-            img_nostaff (np.ndarray): Binarized image from which staff lines have been removed.
-        Returns:
-            contours (list): List of note contours found in the image.
-            binary_contour_img (np.ndarray): Image with detected contours drawn.
-        """
-        # Ensure the image is binary (if not already)
-        img_nostaff = None
-        if len(image.shape) == 3:
-            # Convert to grayscale
-            img_nostaff = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        else:
-            img_nostaff = image
-            
-        _, binary = cv2.threshold(img_nostaff, 128, 255, cv2.THRESH_BINARY_INV)
-
-        # Find external contours
-        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-        # Optional: create an image for visualizing contours
-        contour_img = np.zeros_like(binary)
-        cv2.drawContours(contour_img, contours, -1, 255, thickness=2)
-        return contours, contour_img

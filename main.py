@@ -55,7 +55,7 @@ Examples:
     if not os.path.exists(image_path):
         print(f"Error: Image file '{image_path}' not found.")
         sys.exit(1)
-    
+    print(args.image_path)
     soundfont_path = f"soundfonts/{args.soundfont}"
     
     # Create and configure the player

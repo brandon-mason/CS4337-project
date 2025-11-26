@@ -5,7 +5,7 @@ A Python-based computer vision project that reads clean, computer-generated shee
 ## Features
 
 - **Computer Vision**: Uses OpenCV for image processing and music notation detection
-- **Note Recognition**: Detects musical notes from whole notes to sixteenth notes
+- **Note Recognition**: Detects musical notes from half notes to eighth notes
 - **MIDI File Generation**: Generates a MIDI file based on what is read from the sheet music
 - **Audio File Generation**: Renders an audio file from the generated MIDI file
 - **Staff Detection**: Automatically detects staff lines and maps note positions
@@ -113,9 +113,9 @@ python main.py sheet_music.png --preview
 | Supported | Note Type | Duration | Visual Characteristics |
 |-----------|-----------|----------|----------------------|
 | N | Whole Note | 4 beats | Hollow circle, no stem |
-| N | Half Note | 2 beats | Hollow circle with stem |
+| Y | Half Note | 2 beats | Hollow circle with stem |
 | Y | Quarter Note | 1 beat | Solid circle with stem |
-| N | Eighth Note | 0.5 beats | Solid circle with stem and flag |
+| Y | Eighth Note | 0.5 beats | Solid circle with stem and flag |
 | N | Sixteenth Note | 0.25 beats | Solid circle with stem and double flag |
 
 ## Supported Notes
@@ -167,11 +167,9 @@ project/
 
 ## Limitations
 
-- Currently optimized for treble clef and key of C major only
-- Only detects quarter notes
+- Currently only works for treble clef and key of C major
 - Works best with computer-generated sheet music
-- Limited to single-line melodies (no chords)
-- Requires clear, well-formatted sheet music
+- Limited to monophonic melodies (no chords)
 - Note detection accuracy depends on image quality
 
 ## Future Enhancements
